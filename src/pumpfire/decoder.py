@@ -36,12 +36,13 @@ Anything that does not parse cleanly is dropped, never guessed.
 from __future__ import annotations
 
 import base64
+import json
 import re
 import struct
 import time
 from typing import Any
 
-from .base58 import b58encode
+from .base58 import b58decode, b58encode
 from .constants import (
     DISC_COMPLETE,
     DISC_CREATE,
@@ -56,6 +57,7 @@ from .models import CompleteEvent, CreateEvent, DecodedBatch, RawEvent, TradeEve
 _PROGRAM_DATA = "Program data:"
 _INVOKE = re.compile(r"^Program (\S+) invoke \[(\d+)\]")
 _EXIT = re.compile(r"^Program (\S+) (?:success|failed)")
+EVENT_IX_TAG = bytes.fromhex("e445a52e51cb9a1d")
 
 
 class Reader:
@@ -279,6 +281,55 @@ def decode_complete(
     )
 
 
+def decode_payload(
+    program: str | None,
+    payload: bytes,
+    *,
+    signature: str,
+    slot: int | None,
+    seen_ts: float,
+    registry: IdlRegistry,
+) -> TradeEvent | CreateEvent | CompleteEvent | RawEvent | None:
+    """Decode one event payload from a known program."""
+    if len(payload) < 8:
+        return None
+    discriminator = payload[:8]
+    body = payload[8:]
+    if program in (None, PUMP_PROGRAM):
+        if discriminator == DISC_TRADE:
+            return decode_trade(body, signature=signature, slot=slot, seen_ts=seen_ts)
+        if discriminator == DISC_CREATE:
+            return decode_create(body, signature=signature, slot=slot, seen_ts=seen_ts)
+        if discriminator == DISC_COMPLETE:
+            return decode_complete(body, signature=signature, slot=slot, seen_ts=seen_ts)
+    if program is not None and program not in registry.by_address:
+        return None
+    decoded = registry.decode(program, payload)
+    if decoded is None:
+        return None
+    return RawEvent(
+        program=decoded.program,
+        name=decoded.name,
+        signature=signature,
+        slot=slot,
+        seen_ts=seen_ts,
+        fields=decoded.fields,
+        extra_bytes=decoded.extra_bytes,
+        discriminator=decoded.discriminator,
+    )
+
+
+def append_event(batch: DecodedBatch, event: Any) -> None:
+    if isinstance(event, TradeEvent):
+        batch.trades.append(event)
+    elif isinstance(event, CreateEvent):
+        batch.creates.append(event)
+    elif isinstance(event, CompleteEvent):
+        batch.completes.append(event)
+    elif isinstance(event, RawEvent):
+        batch.raw_events.append(event)
+
+
 def decode_logs(
     logs: list[str],
     *,
@@ -313,41 +364,17 @@ def decode_logs(
         raw = decode_program_data(line)
         if raw is None or len(raw) < 8:
             continue
-        discriminator = raw[:8]
-        body = raw[8:]
         program = stack[-1] if stack else None
-        if program in (None, PUMP_PROGRAM):
-            if discriminator == DISC_TRADE:
-                event = decode_trade(body, signature=signature, slot=slot, seen_ts=now)
-                if event is not None:
-                    batch.trades.append(event)
-                continue
-            if discriminator == DISC_CREATE:
-                creation = decode_create(body, signature=signature, slot=slot, seen_ts=now)
-                if creation is not None:
-                    batch.creates.append(creation)
-                continue
-            if discriminator == DISC_COMPLETE:
-                complete = decode_complete(body, signature=signature, slot=slot, seen_ts=now)
-                if complete is not None:
-                    batch.completes.append(complete)
-                continue
-        if program is not None and program not in idls.by_address:
-            continue
-        decoded = idls.decode(program, raw)
-        if decoded is not None:
-            batch.raw_events.append(
-                RawEvent(
-                    program=decoded.program,
-                    name=decoded.name,
-                    signature=signature,
-                    slot=slot,
-                    seen_ts=now,
-                    fields=decoded.fields,
-                    extra_bytes=decoded.extra_bytes,
-                    discriminator=decoded.discriminator,
-                )
-            )
+        event = decode_payload(
+            program,
+            raw,
+            signature=signature,
+            slot=slot,
+            seen_ts=now,
+            registry=idls,
+        )
+        if event is not None:
+            append_event(batch, event)
     return batch
 
 
@@ -370,6 +397,103 @@ def decode_notification(
         seen_ts=seen_ts,
         registry=registry,
     )
+
+
+def _event_key(event: Any) -> tuple[Any, ...] | None:
+    if isinstance(event, RawEvent):
+        return (
+            "raw",
+            event.name,
+            event.discriminator,
+            json.dumps(event.fields, sort_keys=True, default=str),
+        )
+    if isinstance(event, TradeEvent):
+        return (
+            "trade",
+            event.mint,
+            event.user,
+            event.is_buy,
+            event.sol,
+            event.tokens_raw,
+            event.timestamp,
+        )
+    if isinstance(event, CreateEvent):
+        return ("create", event.mint, event.name, event.symbol, event.uri, event.timestamp)
+    if isinstance(event, CompleteEvent):
+        return ("complete", event.mint, event.timestamp)
+    return None
+
+
+def _account_keys(result: dict[str, Any]) -> list[str]:
+    transaction = result.get("transaction") or {}
+    message = transaction.get("message") or {}
+    keys = [
+        item.get("pubkey") if isinstance(item, dict) else item
+        for item in message.get("accountKeys") or []
+    ]
+    loaded = (result.get("meta") or {}).get("loadedAddresses") or {}
+    keys.extend(loaded.get("writable") or [])
+    keys.extend(loaded.get("readonly") or [])
+    return [key for key in keys if isinstance(key, str)]
+
+
+def decode_transaction(
+    result: dict[str, Any],
+    *,
+    registry: IdlRegistry | None = None,
+) -> DecodedBatch:
+    """Decode a ``getTransaction`` result, including ``emit_cpi!`` events.
+
+    Log events are decoded first. Inner instructions that carry the Anchor
+    ``emit_cpi!`` tag are decoded too, so the backfill does not silently miss
+    events that never appear in ``meta.logMessages``.
+    """
+    meta = result.get("meta") or {}
+    transaction = result.get("transaction") or {}
+    signatures = transaction.get("signatures") or []
+    signature = signatures[0] if signatures else ""
+    slot = result.get("slot")
+    block_time = result.get("blockTime")
+    now = float(block_time) if block_time else time.time()
+    idls = registry or default_registry()
+    batch = decode_logs(
+        meta.get("logMessages") or [],
+        signature=signature,
+        slot=slot,
+        seen_ts=now,
+        registry=idls,
+    )
+    seen = {key for event in batch.events if (key := _event_key(event)) is not None}
+    keys = _account_keys(result)
+    for group in meta.get("innerInstructions") or []:
+        for instruction in group.get("instructions") or []:
+            index = instruction.get("programIdIndex")
+            data = instruction.get("data")
+            if not isinstance(index, int) or not isinstance(data, str):
+                continue
+            if index < 0 or index >= len(keys):
+                continue
+            try:
+                raw = b58decode(data)
+            except ValueError:
+                continue
+            if raw[:8] != EVENT_IX_TAG:
+                continue
+            event = decode_payload(
+                keys[index],
+                raw[8:],
+                signature=signature,
+                slot=slot,
+                seen_ts=now,
+                registry=idls,
+            )
+            key = _event_key(event) if event is not None else None
+            if event is None or key in seen:
+                continue
+            if key is not None:
+                seen.add(key)
+            append_event(batch, event)
+    return batch
 
 
 def decode_log_line(

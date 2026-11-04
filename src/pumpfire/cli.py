@@ -579,6 +579,144 @@ def decode(
             print(json.dumps(event.as_dict(), indent=2))
 
 
+# ── replay / backfill ──────────────────────────────────────────────────
+@app.command()
+def replay(
+    file: Annotated[
+        Path,
+        typer.Option(help="Saved JSON/JSONL notifications or getTransaction responses.", exists=True),
+    ],
+    as_json: Annotated[bool, typer.Option("--json", help="Print decoded events as JSONL.")] = False,
+    out: Annotated[Path | None, typer.Option("--out", help="Write decoded events as JSONL.")] = None,
+    db: Annotated[Path | None, typer.Option("--db", help="Persist typed/raw events to SQLite.")] = None,
+    quiet: Annotated[bool, typer.Option("--quiet", help="Do not print the summary.")] = False,
+) -> None:
+    """Replay a saved firehose file through the decoder and book."""
+    from .backfill import read_records, replay_records
+
+    records = read_records(file)
+    book = CoinBook()
+    store = SQLiteStore(db) if db is not None else None
+    output = sys.stdout
+    close_output = False
+    if out is not None:
+        output = out.open("a", encoding="utf-8")
+        close_output = True
+
+    def on_event(event: Any) -> None:
+        if as_json or out is not None:
+            print(json.dumps(event.as_dict(), separators=(",", ":")), file=output, flush=True)
+        if store is not None:
+            store.enqueue_event(event)
+
+    async def run() -> Any:
+        if store is not None:
+            await store.start()
+        try:
+            stats = replay_records(records, book, on_event=on_event)
+        finally:
+            if store is not None:
+                await store.stop()
+            if close_output:
+                output.close()
+        return stats
+
+    stats = asyncio.run(run())
+    if not quiet:
+        console.print(f"[green]replayed {stats.transactions} transactions[/]")
+        console.print(f"[dim]{stats.as_dict()}[/]")
+        console.print(f"[dim]{book.stats_dict()}[/]")
+
+
+@app.command()
+def backfill(
+    address: Annotated[
+        str | None,
+        typer.Option("--address", "-a", help="Mint, bonding curve, or pool to backfill."),
+    ] = None,
+    signature: Annotated[
+        list[str] | None,
+        typer.Option("--signature", "-s", help="Specific transaction signature (repeatable)."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1000, help="Signatures to fetch.")] = 100,
+    rpc: Annotated[
+        str,
+        typer.Option("--rpc", help="Solana JSON-RPC URL."),
+    ] = os.environ.get("PUMPFIRE_RPC", "https://api.mainnet-beta.solana.com"),
+    rps: Annotated[
+        float,
+        typer.Option("--rps", min=0.1, help="Polite request rate (requests/second)."),
+    ] = 2.0,
+    as_json: Annotated[bool, typer.Option("--json", help="Print decoded events as JSONL.")] = False,
+    out: Annotated[Path | None, typer.Option("--out", help="Write decoded events as JSONL.")] = None,
+    db: Annotated[Path | None, typer.Option("--db", help="Persist typed/raw events to SQLite.")] = None,
+    quiet: Annotated[bool, typer.Option("--quiet", help="Do not print the summary.")] = False,
+) -> None:
+    """Fetch historical transactions from RPC and decode them."""
+    if not address and not signature:
+        raise typer.BadParameter("--address or --signature is required")
+    from .backfill import RpcClient, backfill_events
+
+    if db is None and os.environ.get("PUMPFIRE_DB"):
+        db = Path(os.environ["PUMPFIRE_DB"])
+    book = CoinBook()
+    store = SQLiteStore(db) if db is not None else None
+    output = sys.stdout
+    close_output = False
+    if out is not None:
+        output = out.open("a", encoding="utf-8")
+        close_output = True
+
+    def on_event(event: Any) -> None:
+        if as_json or out is not None:
+            print(json.dumps(event.as_dict(), separators=(",", ":")), file=output, flush=True)
+        if store is not None:
+            store.enqueue_event(event)
+
+    async def run() -> Any:
+        client = RpcClient(rpc, rps=rps)
+        if store is not None:
+            await store.start()
+        try:
+            stats = await backfill_events(
+                client,
+                address=address,
+                signatures=signature,
+                limit=limit,
+                book=book,
+                on_event=on_event,
+            )
+        finally:
+            await client.close()
+            if store is not None:
+                await store.stop()
+            if close_output:
+                output.close()
+        return stats
+
+    stats = asyncio.run(run())
+    if not quiet:
+        console.print(
+            f"[green]fetched {stats.records} signatures, "
+            f"decoded {stats.transactions} transactions[/]"
+        )
+        console.print(f"[dim]{stats.as_dict()}[/]")
+        table = Table(title="Backfill — top coins by volume", box=None, padding=(0, 1))
+        table.add_column("Coin")
+        table.add_column("Trades", justify="right")
+        table.add_column("Volume", justify="right")
+        table.add_column("MCap", justify="right")
+        for coin in book.top(10, sort="volume"):
+            mcap = coin.market_cap_sol * book.sol_usd if book.sol_usd else 0
+            table.add_row(
+                coin.symbol or coin.name or coin.mint[:8],
+                str(coin.trade_count),
+                f"{coin.volume_sol:.2f}◎",
+                _fmt_usd(mcap) if mcap else f"{coin.market_cap_sol:.1f}◎",
+            )
+        console.print(table)
+
+
 # ── export ─────────────────────────────────────────────────────────────
 @app.command()
 def export(

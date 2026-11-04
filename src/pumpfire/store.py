@@ -190,6 +190,17 @@ class SQLiteStore:
     def enqueue_raw(self, event: RawEvent) -> None:
         self._put(("raw", event))
 
+    def enqueue_event(self, event: Any) -> None:
+        kind = getattr(event, "kind", "")
+        if kind == "trade":
+            self.enqueue_trade(event)
+        elif kind == "create":
+            self.enqueue_create(event)
+        elif kind == "complete":
+            self.enqueue_complete(event)
+        elif kind == "raw":
+            self.enqueue_raw(event)
+
     def _put(self, item: tuple[str, Any]) -> None:
         try:
             self.queue.put_nowait(item)
