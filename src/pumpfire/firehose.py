@@ -22,16 +22,21 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from .constants import DEFAULT_STALE_AFTER_S, PUBLIC_WS, PUMP_PROGRAM
+from .constants import (
+    DEFAULT_STALE_AFTER_S,
+    PUBLIC_WS,
+    PUMP_AMM_PROGRAM,
+    PUMP_PROGRAM,
+)
 from .decoder import decode_notification, notification_value
-from .models import CoinBook, CompleteEvent, CreateEvent, DecodedBatch, TradeEvent
+from .models import CoinBook, CompleteEvent, CreateEvent, DecodedBatch, RawEvent, TradeEvent
 
 if TYPE_CHECKING:
     from .metadata import MetadataFetcher
 
 LOGGER = logging.getLogger("pumpfire.firehose")
 
-Event = TradeEvent | CreateEvent | CompleteEvent
+Event = TradeEvent | CreateEvent | CompleteEvent | RawEvent
 EventCallback = Callable[[Event], Awaitable[None] | None]
 
 
@@ -43,7 +48,8 @@ class Firehose:
         book: CoinBook,
         *,
         endpoints: list[str] | tuple[str, ...] | None = None,
-        program: str = PUMP_PROGRAM,
+        program: str | None = None,
+        programs: list[str] | tuple[str, ...] | None = None,
         commitment: str = "processed",
         stale_after_s: float = DEFAULT_STALE_AFTER_S,
         dedupe_size: int = 100_000,
@@ -54,7 +60,13 @@ class Firehose:
     ) -> None:
         self.book = book
         self.endpoints = list(endpoints or PUBLIC_WS)
-        self.program = program
+        if programs is not None:
+            self.programs = list(programs)
+        elif program is not None:
+            self.programs = [program]
+        else:
+            self.programs = [PUMP_PROGRAM, PUMP_AMM_PROGRAM]
+        self.program = self.programs[0]
         self.commitment = commitment
         self.stale_after_s = stale_after_s
         self.dedupe_size = dedupe_size
@@ -141,17 +153,23 @@ class Firehose:
             ping_timeout=20,
             max_size=2**23,
         ) as ws:
-            request = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "logsSubscribe",
-                "params": [{"mentions": [self.program]}, {"commitment": self.commitment}],
-            }
-            await ws.send(json.dumps(request))
+            # The public endpoint accepts one address per `mentions` filter.
+            # Send one subscription request per program on the same socket.
+            for index, program in enumerate(self.programs, start=1):
+                request = {
+                    "jsonrpc": "2.0",
+                    "id": index,
+                    "method": "logsSubscribe",
+                    "params": [
+                        {"mentions": [program]},
+                        {"commitment": self.commitment},
+                    ],
+                }
+                await ws.send(json.dumps(request))
             self.endpoint = url
             self.book.stats.endpoint = url
             self.connected = True
-            LOGGER.info("subscribed to %s via %s", self.program, url)
+            LOGGER.info("subscribed to %s via %s", ", ".join(self.programs), url)
             while not self._stop.is_set():
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=self.stale_after_s)
@@ -224,6 +242,9 @@ class Firehose:
         for complete in batch.completes:
             self.book.apply_complete(complete)
             self._emit(complete)
+        for raw_event in batch.raw_events:
+            self.book.apply_raw(raw_event)
+            self._emit(raw_event)
 
     def _emit(self, event: Event) -> None:
         if self._queue is None:
@@ -290,6 +311,7 @@ class Firehose:
             "connected": self.connected,
             "endpoint": self.endpoint,
             "program": self.program,
+            "programs": self.programs,
             "commitment": self.commitment,
             "last_message_age_s": self.last_message_age(),
             "stale": self.is_stale(),

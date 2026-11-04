@@ -36,6 +36,7 @@ Anything that does not parse cleanly is dropped, never guessed.
 from __future__ import annotations
 
 import base64
+import re
 import struct
 import time
 from typing import Any
@@ -46,11 +47,15 @@ from .constants import (
     DISC_CREATE,
     DISC_TRADE,
     LAMPORTS_PER_SOL,
+    PUMP_PROGRAM,
     TOKEN_SCALE,
 )
-from .models import CompleteEvent, CreateEvent, DecodedBatch, TradeEvent
+from .idl import IdlRegistry, default_registry
+from .models import CompleteEvent, CreateEvent, DecodedBatch, RawEvent, TradeEvent
 
 _PROGRAM_DATA = "Program data:"
+_INVOKE = re.compile(r"^Program (\S+) invoke \[(\d+)\]")
+_EXIT = re.compile(r"^Program (\S+) (?:success|failed)")
 
 
 class Reader:
@@ -280,33 +285,77 @@ def decode_logs(
     signature: str = "",
     slot: int | None = None,
     seen_ts: float | None = None,
+    registry: IdlRegistry | None = None,
 ) -> DecodedBatch:
-    """Decode every pump.fun event in a transaction's log list."""
+    """Decode every pump.fun / PumpSwap event in a transaction's log list.
+
+    The log stack is tracked so events with the same Anchor discriminator in
+    different programs (some event names are shared) are attributed correctly.
+    Events that are not one of the three book events are returned as
+    :class:`RawEvent` records via the bundled IDLs.
+    """
     now = time.time() if seen_ts is None else seen_ts
     batch = DecodedBatch(signature=signature, slot=slot)
+    idls = registry or default_registry()
+    stack: list[str] = []
     for line in logs or ():
+        invoke = _INVOKE.match(line)
+        if invoke:
+            stack.append(invoke.group(1))
+            continue
+        exit_match = _EXIT.match(line)
+        if exit_match:
+            program_id = exit_match.group(1)
+            while stack:
+                if stack.pop() == program_id:
+                    break
+            continue
         raw = decode_program_data(line)
         if raw is None or len(raw) < 8:
             continue
         discriminator = raw[:8]
         body = raw[8:]
-        if discriminator == DISC_TRADE:
-            event = decode_trade(body, signature=signature, slot=slot, seen_ts=now)
-            if event is not None:
-                batch.trades.append(event)
-        elif discriminator == DISC_CREATE:
-            creation = decode_create(body, signature=signature, slot=slot, seen_ts=now)
-            if creation is not None:
-                batch.creates.append(creation)
-        elif discriminator == DISC_COMPLETE:
-            complete = decode_complete(body, signature=signature, slot=slot, seen_ts=now)
-            if complete is not None:
-                batch.completes.append(complete)
+        program = stack[-1] if stack else None
+        if program in (None, PUMP_PROGRAM):
+            if discriminator == DISC_TRADE:
+                event = decode_trade(body, signature=signature, slot=slot, seen_ts=now)
+                if event is not None:
+                    batch.trades.append(event)
+                continue
+            if discriminator == DISC_CREATE:
+                creation = decode_create(body, signature=signature, slot=slot, seen_ts=now)
+                if creation is not None:
+                    batch.creates.append(creation)
+                continue
+            if discriminator == DISC_COMPLETE:
+                complete = decode_complete(body, signature=signature, slot=slot, seen_ts=now)
+                if complete is not None:
+                    batch.completes.append(complete)
+                continue
+        if program is not None and program not in idls.by_address:
+            continue
+        decoded = idls.decode(program, raw)
+        if decoded is not None:
+            batch.raw_events.append(
+                RawEvent(
+                    program=decoded.program,
+                    name=decoded.name,
+                    signature=signature,
+                    slot=slot,
+                    seen_ts=now,
+                    fields=decoded.fields,
+                    extra_bytes=decoded.extra_bytes,
+                    discriminator=decoded.discriminator,
+                )
+            )
     return batch
 
 
 def decode_notification(
-    value: dict[str, Any], *, seen_ts: float | None = None
+    value: dict[str, Any],
+    *,
+    seen_ts: float | None = None,
+    registry: IdlRegistry | None = None,
 ) -> DecodedBatch:
     """Decode the ``params.result.value`` object of a logsSubscribe message."""
     signature = str(value.get("signature") or "")
@@ -314,12 +363,33 @@ def decode_notification(
     if value.get("err"):
         return DecodedBatch(signature=signature, slot=slot)
     logs = value.get("logs") or []
-    return decode_logs(logs, signature=signature, slot=slot, seen_ts=seen_ts)
+    return decode_logs(
+        logs,
+        signature=signature,
+        slot=slot,
+        seen_ts=seen_ts,
+        registry=registry,
+    )
 
 
-def decode_log_line(line: str) -> DecodedBatch:
-    """Decode one raw ``Program data:`` line (useful for debugging)."""
-    return decode_logs([line])
+def decode_log_line(
+    line: str,
+    *,
+    program: str | None = None,
+    registry: IdlRegistry | None = None,
+) -> DecodedBatch:
+    """Decode one raw ``Program data:`` line (useful for debugging).
+
+    Pass ``program="pump_amm"`` when decoding a line from the AMM, because a
+    few event names share a discriminator across the two programs.
+    """
+    idls = registry or default_registry()
+    logs = [line]
+    if program:
+        address = idls.address_for(program)
+        if address:
+            logs = [f"Program {address} invoke [1]", line, f"Program {address} success"]
+    return decode_logs(logs, registry=idls)
 
 
 def notification_value(message: dict[str, Any]) -> dict[str, Any] | None:

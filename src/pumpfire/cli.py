@@ -20,6 +20,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
+from .constants import PUMP_PROGRAM
 from .decoder import decode_log_line, decode_logs
 from .demo import DemoFeed
 from .firehose import Firehose
@@ -92,7 +93,8 @@ def _matches_event(
     buys_only: bool,
     sells_only: bool,
 ) -> bool:
-    if mints and event.mint not in mints:
+    event_mint = getattr(event, "mint", None)
+    if mints and event_mint not in mints:
         return False
     if event.kind != "trade":
         return True
@@ -120,6 +122,7 @@ def _build_firehose(
     commitment: str,
     metadata: MetadataFetcher | None,
     on_event: Any = None,
+    programs: list[str] | None = None,
 ) -> Firehose:
     return Firehose(
         book,
@@ -127,6 +130,7 @@ def _build_firehose(
         commitment=commitment,
         metadata=metadata,
         on_event=on_event,
+        programs=programs,
     )
 
 
@@ -297,6 +301,10 @@ def stream(
         float,
         typer.Option("--sol-usd", help="Pin SOL/USD instead of fetching it."),
     ] = 0.0,
+    no_amm: Annotated[
+        bool,
+        typer.Option("--no-amm", help="Skip PumpSwap AMM events; watch the bonding curve only."),
+    ] = False,
 ) -> None:
     """Watch the firehose in your terminal."""
     if out is not None and not as_json:
@@ -339,6 +347,7 @@ def stream(
         commitment=commitment,
         metadata=metadata_fetcher,
         on_event=on_event if as_json else None,
+        programs=[PUMP_PROGRAM] if no_amm else None,
     )
 
     async def run() -> None:
@@ -389,6 +398,10 @@ def api(
         bool,
         typer.Option("--no-ui", help="Disable the dashboard; serve the API only."),
     ] = False,
+    no_amm: Annotated[
+        bool,
+        typer.Option("--no-amm", help="Skip PumpSwap AMM events; bonding curve only."),
+    ] = False,
     max_coins: Annotated[int, typer.Option(help="Maximum coins kept in memory.")] = 10_000,
 ) -> None:
     """Serve the dashboard, HTTP API, and WebSocket."""
@@ -415,7 +428,13 @@ def api(
         demo_feed = None
         metadata_enabled = _env_bool("PUMPFIRE_METADATA", True) and not no_metadata
         metadata = _build_metadata(book, metadata_enabled)
-        firehose = _build_firehose(book, ws=ws, commitment=commitment, metadata=metadata)
+        firehose = _build_firehose(
+            book,
+            ws=ws,
+            commitment=commitment,
+            metadata=metadata,
+            programs=[PUMP_PROGRAM] if no_amm else None,
+        )
         solprice = SolPrice(book, fixed=_fixed_price(sol_usd))
     store = SQLiteStore(db) if db is not None else None
     application = create_app(
@@ -508,13 +527,17 @@ def decode(
         Path | None,
         typer.Option(help="JSON notification or JSONL file."),
     ] = None,
+    program: Annotated[
+        str | None,
+        typer.Option("--program", help="pump or pump_amm, for bare --log lines."),
+    ] = None,
     compact: Annotated[bool, typer.Option(help="Print one JSON object per line.")] = False,
 ) -> None:
     """Decode raw Program data lines or a recorded notification."""
     events: list[Any] = []
     if log:
         for line in log:
-            events.extend(decode_log_line(line).events)
+            events.extend(decode_log_line(line, program=program).events)
     if file is not None:
         if not file.exists():
             raise typer.BadParameter(f"no such file: {file}")

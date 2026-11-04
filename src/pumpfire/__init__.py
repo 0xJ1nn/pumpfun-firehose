@@ -9,11 +9,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .decoder import decode_log_line, decode_logs, decode_notification
 from .firehose import Firehose
-from .models import Coin, CoinBook, CompleteEvent, CreateEvent, DecodedBatch, TradeEvent
+from .idl import IdlRegistry
+from .models import (
+    Coin,
+    CoinBook,
+    CompleteEvent,
+    CreateEvent,
+    DecodedBatch,
+    RawEvent,
+    TradeEvent,
+)
 
 if TYPE_CHECKING:  # optional helpers, available only with the matching extra
     from .metadata import MetadataFetcher as MetadataFetcher
@@ -33,6 +42,8 @@ __all__ = [
     "CreateEvent",
     "DecodedBatch",
     "Firehose",
+    "IdlRegistry",
+    "RawEvent",
     "TradeEvent",
     "decode_log_line",
     "decode_logs",

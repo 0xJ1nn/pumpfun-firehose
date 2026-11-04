@@ -7,7 +7,7 @@
 **A clean, self-hosted real-time data layer for pump.fun.**  
 One WebSocket subscription. Every buy, every sell, every launch — decoded from the pump.fun program's own Anchor events. No scraping. No REST polling. No rate-limit tax.
 
-[![Tests](https://img.shields.io/badge/tests-49%20passing-14f195)](#development)
+[![Tests](https://img.shields.io/badge/tests-56%20passing-14f195)](#development)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-14f195)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-9945ff)](LICENSE)
 [![No API key](https://img.shields.io/badge/API%20key-not%20required-ff3d9a)](#why-this-exists)
@@ -40,7 +40,9 @@ PumpFire turns that stream into a clean, queryable feed:
 - 📈 **Market state** — exact price, market cap, volume, buys/sells, unique traders, 1m/5m change
 - 🎓 **Graduations** — `CompleteEvent` marks the moment a coin leaves the curve
 - 🆕 **Launches** — `CreateEvent` gives you the mint, name, symbol, URI, and creator
-- 🔌 **Three ways in** — CLI, HTTP/WebSocket API, Python library
+- 🔁 **PumpSwap AMM** — buys and sells on graduated coins, mapped into the same trade tape
+- 🧬 **Every event** — 32 pump.fun events and 27 PumpSwap events via bundled IDLs, with raw events on `/v1/events`
+- 🔌 **Four ways in** — CLI, HTTP/WebSocket API, dashboard, Python library
 - 🧠 **Zero RPC** — the event carries everything; no `getTransaction` per trade
 - 🆓 **Zero keys** — free public Solana WebSocket endpoints by default
 - 🪶 **Lightweight by default** — core install is one dependency; the dashboard, API, metadata, and SQLite are extras
@@ -231,6 +233,31 @@ No price oracle. No estimation. The reserves are the chain state at the moment o
 
 ---
 
+## PumpSwap and every event
+
+The live subscription covers **both** programs:
+
+- the pump.fun bonding-curve program (`6EF8…F6P`)
+- the PumpSwap AMM (`pAMM…FXEA`)
+
+The bundled IDLs decode all **32 pump.fun events** and **27 PumpSwap events**, including fee events, creator events, migrations, pool creation, AMM buys, and AMM sells. The three book events (`TradeEvent`, `CreateEvent`, `CompleteEvent`) feed the coin table; every other event is available as a raw IDL event.
+
+```bash
+curl -s 'localhost:8000/v1/events?program=pump_amm&event=BuyEvent&limit=5' | jq
+curl -s 'localhost:8000/v1/pools' | jq
+```
+
+For graduated coins:
+
+- `CreatePoolEvent` or the pump `CompletePumpAmmMigrationEvent` registers the pool.
+- AMM `BuyEvent` / `SellEvent` are mapped into the same trade tape with `venue: "pumpswap"`.
+- The AMM pool reserves drive price and market cap after graduation.
+- Non-SOL quote pools are exposed as raw events rather than pretending their quote amount is SOL.
+
+Want the bonding curve only? Use `pumpfire stream --no-amm` or `pumpfire api --no-amm`. The default is both programs.
+
+---
+
 ## Live dashboard
 
 The dashboard is a **single static HTML file** served by the API. No build step, no npm, no CDN, no external fonts.
@@ -263,6 +290,8 @@ pumpfire api --host 127.0.0.1 --port 8000
 | `GET` | `/v1/trades` | Global tape (`mint`, `side`, `min_sol`, `limit`) |
 | `GET` | `/v1/creates` | New launches |
 | `GET` | `/v1/completes` | Graduations |
+| `GET` | `/v1/events` | Raw IDL events (`program`, `event`, `limit`) |
+| `GET` | `/v1/pools` | PumpSwap pools discovered from migration / pool-create events |
 | `WS` | `/ws` | 1 Hz snapshot: stats + top coins + trades + creates |
 
 Example coin:
@@ -337,12 +366,14 @@ pumpfire stream --watchlist mints.txt    # one mint per line
 pumpfire stream --json                   # JSONL for piping
 pumpfire stream --json --out trades.jsonl  # JSONL to a file
 pumpfire stream --metadata               # opt-in metadata fetches
+pumpfire stream --no-amm                 # bonding curve only
 pumpfire top --duration 60               # ranked snapshot after 60s
 pumpfire api                             # dashboard + API
 pumpfire api --no-ui                     # API only, no frontend
 pumpfire api --demo                      # dashboard with fake data
 pumpfire api --db pumpfire.db            # persist to SQLite
 pumpfire decode --log "Program data: …"  # decode a raw log line
+pumpfire decode --program pump_amm --log "…"  # decode an AMM event
 pumpfire export --db pumpfire.db --table trades --format csv --out trades.csv
 pumpfire version
 ```
@@ -444,6 +475,8 @@ The core trick is **not novel**: `logsSubscribe` on the pump.fun program and dec
 - [pump.fun's official API](https://docs.pump.fun/) — read-only profiles, graph, callouts, leaderboards, and wallet positions. It is **not** a real-time trade firehose.
 
 So what is PumpFire? A clean, self-hosted packaging of the public firehose: keyless public-WSS defaults, a live dashboard, an HTTP/WebSocket API, a CLI, a Python library, exact reserves → price/mcap/curve, metadata enrichment, SQLite, and a demo mode. The protocol is public; the ergonomics are the contribution.
+
+`Dennim89/pumpfun-stream` deserves a specific nod: it already does IDL-driven decoding for pump + PumpSwap. PumpFire's difference is the live book, the AMM trade mapping, the dashboard, and the query surface — not the raw decoder idea.
 
 **Why not just use PumpPortal?** It is a great hosted option. PumpFire is for when you want to self-host, avoid per-event metering, own the data, and query it locally.
 

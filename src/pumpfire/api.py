@@ -199,6 +199,33 @@ def create_app(
         rows = [event.as_dict() for event in book.recent_completes(limit)]
         return {"count": len(rows), "completes": rows}
 
+    @app.get("/v1/events", tags=["events"])
+    async def events(
+        limit: int = Query(100, ge=1, le=1_000),
+        program: str | None = Query(None, description="pump or pump_amm"),
+        event: str | None = Query(None, description="IDL event name, e.g. BuyEvent"),
+    ) -> dict[str, Any]:
+        rows = [
+            item.as_dict()
+            for item in book.raw_events_for(limit, program=program, event=event)
+        ]
+        return {"count": len(rows), "events": rows}
+
+    @app.get("/v1/pools", tags=["events"])
+    async def pools() -> dict[str, Any]:
+        rows = [
+            {
+                "pool": info.pool,
+                "base_mint": info.base_mint,
+                "base_decimals": info.base_decimals,
+                "quote_mint": info.quote_mint,
+                "quote_decimals": info.quote_decimals,
+                "created_ts": round(info.created_ts, 3),
+            }
+            for info in book.pools.values()
+        ]
+        return {"count": len(rows), "pools": rows}
+
     # ── websocket ───────────────────────────────────────────────────────
     @app.websocket("/ws")
     async def websocket(websocket: WebSocket) -> None:
@@ -240,6 +267,8 @@ def _store_event(store: SQLiteStore, event: Any) -> None:
         store.enqueue_create(event)
     elif event.kind == "complete":
         store.enqueue_complete(event)
+    elif event.kind == "raw":
+        store.enqueue_raw(event)
 
 
 async def _snapshot_coins(store: SQLiteStore, book: CoinBook, interval_s: float = 10.0) -> None:

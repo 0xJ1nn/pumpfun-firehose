@@ -18,6 +18,7 @@ from .constants import (
     INITIAL_VIRTUAL_TOKEN,
     TOTAL_SUPPLY,
     UNIQUE_WALLET_CAP,
+    WSOL_MINT,
 )
 
 
@@ -72,6 +73,9 @@ class TradeEvent:
     fee_sol: float | None = None
     creator: str | None = None
     creator_fee_sol: float | None = None
+    venue: str = "pumpfun"
+    pool: str | None = None
+    total_supply: float | None = None
     kind: str = "trade"
 
     def as_dict(self) -> dict[str, Any]:
@@ -96,6 +100,9 @@ class TradeEvent:
             "fee_sol": _round(self.fee_sol, 9),
             "creator": self.creator,
             "creator_fee_sol": _round(self.creator_fee_sol, 9),
+            "venue": self.venue,
+            "pool": self.pool,
+            "total_supply": _round(self.total_supply, 6),
         }
 
 
@@ -166,6 +173,36 @@ class CompleteEvent:
 
 
 @dataclass(slots=True)
+class RawEvent:
+    """Any IDL-decoded event that is not one of the three book events."""
+
+    program: str
+    name: str
+    signature: str
+    slot: int | None
+    seen_ts: float
+    fields: Any
+    extra_bytes: int = 0
+    discriminator: str = ""
+    mint: str | None = None
+    kind: str = "raw"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "program": self.program,
+            "event": self.name,
+            "signature": self.signature,
+            "slot": self.slot,
+            "seen_ts": round(self.seen_ts, 3),
+            "discriminator": self.discriminator,
+            "extra_bytes": self.extra_bytes,
+            "mint": self.mint,
+            "fields": self.fields,
+        }
+
+
+@dataclass(slots=True)
 class DecodedBatch:
     """All pump.fun events found in one transaction notification."""
 
@@ -174,10 +211,11 @@ class DecodedBatch:
     trades: list[TradeEvent] = field(default_factory=list)
     creates: list[CreateEvent] = field(default_factory=list)
     completes: list[CompleteEvent] = field(default_factory=list)
+    raw_events: list[RawEvent] = field(default_factory=list)
 
     @property
-    def events(self) -> list[TradeEvent | CreateEvent | CompleteEvent]:
-        return [*self.creates, *self.trades, *self.completes]
+    def events(self) -> list[TradeEvent | CreateEvent | CompleteEvent | RawEvent]:
+        return [*self.creates, *self.trades, *self.completes, *self.raw_events]
 
 
 @dataclass(slots=True)
@@ -190,6 +228,8 @@ class Coin:
     uri: str = ""
     creator: str = ""
     bonding_curve: str = ""
+    pool: str = ""
+    venue: str = "pumpfun"
     created_ts: float = 0.0
     first_seen_ts: float = 0.0
     last_ts: float = 0.0
@@ -291,6 +331,8 @@ class Coin:
             "uri": self.uri,
             "creator": self.creator,
             "bonding_curve": self.bonding_curve,
+            "pool": self.pool,
+            "venue": self.venue,
             "created_ts": round(self.created_ts, 3),
             "first_seen_ts": round(self.first_seen_ts, 3),
             "last_ts": round(self.last_ts, 3),
@@ -342,6 +384,9 @@ class BookStats:
     trades: int = 0
     creates: int = 0
     completes: int = 0
+    raw_events: int = 0
+    amm_trades: int = 0
+    pools: int = 0
     errors: int = 0
     reconnects: int = 0
     dropped: int = 0
@@ -355,7 +400,7 @@ class BookStats:
     message_rate: RateMeter = field(default_factory=RateMeter)
     trade_rate: RateMeter = field(default_factory=RateMeter)
 
-    def as_dict(self, *, coins: int, graduated: int, sol_usd: float) -> dict[str, Any]:
+    def as_dict(self, *, coins: int, graduated: int, sol_usd: float, pools: int = 0) -> dict[str, Any]:
         now = time.time()
         return {
             "uptime_s": round(now - self.started_ts, 1),
@@ -365,6 +410,9 @@ class BookStats:
             "trades": self.trades,
             "creates": self.creates,
             "completes": self.completes,
+            "raw_events": self.raw_events,
+            "amm_trades": self.amm_trades,
+            "pools": pools,
             "errors": self.errors,
             "reconnects": self.reconnects,
             "dropped": self.dropped,
@@ -385,6 +433,18 @@ class BookStats:
         }
 
 
+@dataclass(slots=True)
+class PoolInfo:
+    """The PumpSwap pool for a graduated mint."""
+
+    pool: str
+    base_mint: str
+    base_decimals: int
+    quote_mint: str
+    quote_decimals: int
+    created_ts: float
+
+
 class CoinBook:
     """Bounded, thread-free in-memory aggregation of the firehose."""
 
@@ -395,6 +455,7 @@ class CoinBook:
         recent_trades: int = 2_000,
         recent_creates: int = 500,
         recent_completes: int = 200,
+        recent_events: int = 5_000,
         sol_usd: float = 0.0,
     ) -> None:
         self.max_coins = max_coins
@@ -402,6 +463,8 @@ class CoinBook:
         self.trades: deque[TradeEvent] = deque(maxlen=recent_trades)
         self.creates: deque[CreateEvent] = deque(maxlen=recent_creates)
         self.completes: deque[CompleteEvent] = deque(maxlen=recent_completes)
+        self.raw_events: deque[RawEvent] = deque(maxlen=recent_events)
+        self.pools: dict[str, PoolInfo] = {}
         self.stats = BookStats()
         self.sol_usd = sol_usd
         self.sol_price_source = "fixed" if sol_usd else ""
@@ -469,6 +532,12 @@ class CoinBook:
                 coin.unique_sellers.add(event.user)
             else:
                 coin.unique_capped = True
+        coin.venue = event.venue
+        if event.pool:
+            coin.pool = event.pool
+        if event.total_supply and event.total_supply > 0:
+            coin.total_supply = event.total_supply
+            coin.market_cap_sol = coin.price_sol * coin.total_supply
         coin.recent.append(event)
         coin.snapshot(now)
         self.trades.append(event)
@@ -532,6 +601,138 @@ class CoinBook:
         self.completes.append(event)
         self.stats.completes += 1
         return coin
+
+    def apply_raw(self, event: RawEvent) -> None:
+        """Store an IDL event and fold PumpSwap trades into the live book."""
+        self.raw_events.append(event)
+        self.stats.raw_events += 1
+        if event.program == "pump_amm":
+            if event.name == "CreatePoolEvent":
+                self._register_pool(event)
+            elif event.name in {"BuyEvent", "SellEvent"}:
+                trade = self._amm_trade(event)
+                if trade is not None:
+                    event.mint = trade.mint
+                    self.apply_trade(trade)
+                    self.stats.amm_trades += 1
+        elif event.program == "pump" and event.name == "CompletePumpAmmMigrationEvent":
+            self._register_migration_pool(event)
+
+    def _add_pool(self, info: PoolInfo, seen_ts: float) -> None:
+        self.pools[info.pool] = info
+        self.stats.pools = len(self.pools)
+        coin = self.get_or_create(info.base_mint, seen_ts)
+        coin.pool = info.pool
+        coin.venue = "pumpswap"
+        if not coin.graduated:
+            coin.graduated = True
+            coin.graduated_ts = info.created_ts
+
+    def _register_pool(self, event: RawEvent) -> None:
+        fields = event.fields
+        if not isinstance(fields, dict):
+            return
+        pool = fields.get("pool")
+        base_mint = fields.get("base_mint")
+        if not pool or not base_mint:
+            return
+        info = PoolInfo(
+            pool=str(pool),
+            base_mint=str(base_mint),
+            base_decimals=int(fields.get("base_mint_decimals") or 6),
+            quote_mint=str(fields.get("quote_mint") or ""),
+            quote_decimals=int(fields.get("quote_mint_decimals") or 9),
+            created_ts=float(fields.get("timestamp") or event.seen_ts),
+        )
+        self._add_pool(info, event.seen_ts)
+        event.mint = info.base_mint
+
+    def _register_migration_pool(self, event: RawEvent) -> None:
+        """The migration event also tells us the pool and mint.
+
+        Some AMM pool-creation events are emitted via inner instructions and do
+        not appear in logsSubscribe. The pump migration event does, so it is the
+        fallback that keeps AMM trades flowing for freshly graduated coins.
+        """
+        fields = event.fields
+        if not isinstance(fields, dict):
+            return
+        pool = fields.get("pool")
+        base_mint = fields.get("mint")
+        quote_mint = str(fields.get("quote_mint") or "")
+        if not pool or not base_mint:
+            return
+        info = PoolInfo(
+            pool=str(pool),
+            base_mint=str(base_mint),
+            base_decimals=6,
+            quote_mint=quote_mint,
+            quote_decimals=9 if quote_mint == WSOL_MINT else 6,
+            created_ts=float(fields.get("timestamp") or event.seen_ts),
+        )
+        self._add_pool(info, event.seen_ts)
+        event.mint = info.base_mint
+
+    def _amm_trade(self, event: RawEvent) -> TradeEvent | None:
+        fields = event.fields
+        if not isinstance(fields, dict):
+            return None
+        pool = self.pools.get(str(fields.get("pool") or ""))
+        if pool is None or pool.quote_mint != WSOL_MINT:
+            # Non-SOL quote pools need an exchange rate; expose them as raw
+            # events instead of pretending their quote amount is SOL.
+            return None
+        base_scale = 10**pool.base_decimals
+        quote_scale = 10**pool.quote_decimals
+        if event.name == "BuyEvent":
+            sol_raw = int(fields.get("quote_amount_in") or 0)
+            token_raw = int(fields.get("base_amount_out") or 0)
+            is_buy = True
+        else:
+            sol_raw = int(fields.get("quote_amount_out") or 0)
+            token_raw = int(fields.get("base_amount_in") or 0)
+            is_buy = False
+        user = str(fields.get("user") or "")
+        if token_raw <= 0 or sol_raw <= 0 or not user:
+            return None
+        sol = sol_raw / quote_scale
+        tokens = token_raw / base_scale
+        pool_sol = int(fields.get("pool_quote_token_reserves") or 0) / quote_scale
+        pool_tokens = int(fields.get("pool_base_token_reserves") or 0) / base_scale
+        price = (
+            pool_sol / pool_tokens
+            if pool_tokens > 0
+            else (sol / tokens if tokens > 0 else None)
+        )
+        fee_raw = (
+            int(fields.get("lp_fee") or 0)
+            + int(fields.get("protocol_fee") or 0)
+            + int(fields.get("coin_creator_fee") or 0)
+        )
+        supply_raw = int(fields.get("base_supply") or 0)
+        total_supply = supply_raw / base_scale if supply_raw > 0 else None
+        return TradeEvent(
+            signature=event.signature,
+            mint=pool.base_mint,
+            user=user,
+            is_buy=is_buy,
+            sol=sol,
+            tokens=tokens,
+            tokens_raw=token_raw,
+            price_sol=price,
+            timestamp=int(fields.get("timestamp") or event.seen_ts),
+            slot=event.slot,
+            seen_ts=event.seen_ts,
+            virtual_sol=pool_sol or None,
+            virtual_token=pool_tokens or None,
+            real_sol=pool_sol or None,
+            real_token=pool_tokens or None,
+            fee_sol=fee_raw / quote_scale if fee_raw else 0.0,
+            creator=str(fields.get("coin_creator") or "") or None,
+            venue="pumpswap",
+            pool=pool.pool,
+            total_supply=total_supply,
+        )
 
     def set_metadata(self, mint: str, metadata: dict[str, Any]) -> None:
         coin = self.coins.get(mint)
@@ -641,11 +842,30 @@ class CoinBook:
     def recent_completes(self, limit: int = 50) -> list[CompleteEvent]:
         return list(self.completes)[-limit:][::-1]
 
+    def raw_events_for(
+        self,
+        limit: int = 100,
+        *,
+        program: str | None = None,
+        event: str | None = None,
+    ) -> list[RawEvent]:
+        out: list[RawEvent] = []
+        for item in reversed(self.raw_events):
+            if program and item.program != program:
+                continue
+            if event and item.name != event:
+                continue
+            out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
     def stats_dict(self) -> dict[str, Any]:
         return self.stats.as_dict(
             coins=len(self.coins),
             graduated=self.graduated_count(),
             sol_usd=self.sol_usd,
+            pools=len(self.pools),
         )
 
     def snapshot(
