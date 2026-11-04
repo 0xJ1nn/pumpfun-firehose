@@ -9,9 +9,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
-from .decoder import decode_log_line, decode_logs, decode_notification
+from .decoder import (
+    decode_log_line,
+    decode_logs,
+    decode_notification,
+    decode_transaction,
+)
 from .firehose import Firehose
 from .idl import IdlRegistry
 from .models import (
@@ -48,6 +53,7 @@ __all__ = [
     "decode_log_line",
     "decode_logs",
     "decode_notification",
+    "decode_transaction",
     "__version__",
 ]
 

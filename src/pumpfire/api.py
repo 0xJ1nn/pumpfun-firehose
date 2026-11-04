@@ -261,14 +261,7 @@ def create_app(
 
 
 def _store_event(store: SQLiteStore, event: Any) -> None:
-    if event.kind == "trade":
-        store.enqueue_trade(event)
-    elif event.kind == "create":
-        store.enqueue_create(event)
-    elif event.kind == "complete":
-        store.enqueue_complete(event)
-    elif event.kind == "raw":
-        store.enqueue_raw(event)
+    store.enqueue_event(event)
 
 
 async def _snapshot_coins(store: SQLiteStore, book: CoinBook, interval_s: float = 10.0) -> None:

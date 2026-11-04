@@ -7,7 +7,7 @@
 **A clean, self-hosted real-time data layer for pump.fun.**  
 One WebSocket subscription. Every buy, every sell, every launch — decoded from the pump.fun program's own Anchor events. No scraping. No REST polling. No rate-limit tax.
 
-[![Tests](https://img.shields.io/badge/tests-56%20passing-14f195)](#development)
+[![Tests](https://img.shields.io/badge/tests-66%20passing-14f195)](#development)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-14f195)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-9945ff)](LICENSE)
 [![No API key](https://img.shields.io/badge/API%20key-not%20required-ff3d9a)](#why-this-exists)
@@ -42,6 +42,7 @@ PumpFire turns that stream into a clean, queryable feed:
 - 🆕 **Launches** — `CreateEvent` gives you the mint, name, symbol, URI, and creator
 - 🔁 **PumpSwap AMM** — buys and sells on graduated coins, mapped into the same trade tape
 - 🧬 **Every event** — 32 pump.fun events and 27 PumpSwap events via bundled IDLs, with raw events on `/v1/events`
+- 🧪 **Historical replay** — replay saved files or backfill a mint / curve / pool from RPC, including `emit_cpi!` events
 - 🔌 **Four ways in** — CLI, HTTP/WebSocket API, dashboard, Python library
 - 🧠 **Zero RPC** — the event carries everything; no `getTransaction` per trade
 - 🆓 **Zero keys** — free public Solana WebSocket endpoints by default
@@ -321,6 +322,41 @@ The API also serves interactive OpenAPI docs at **`/docs`** while it is running.
 
 ---
 
+## Historical backfill & replay
+
+The live firehose is not the only way in.
+
+### Replay a saved file
+
+```bash
+pumpfire replay --file notifications.jsonl --json
+pumpfire replay --file transactions.json --db research.db
+```
+
+`replay` accepts:
+
+- `logsSubscribe` notification objects
+- `getTransaction` responses
+- bare `{signature, logs, slot}` records
+- JSON arrays or JSONL
+
+### Backfill from RPC
+
+```bash
+pumpfire backfill --address <mint-or-bonding-curve-or-pool> --limit 100 --rps 2
+pumpfire backfill --signature <sig> --signature <sig> --db research.db
+```
+
+- Uses the public Solana RPC by default; set `--rpc` or `PUMPFIRE_RPC`.
+- `--rps` keeps the request rate polite (default `2`).
+- Decodes log events **and** `emit_cpi!` inner instructions.
+- Dedupes identical events seen in both channels.
+- `--json` prints JSONL; `--out` writes JSONL; `--db` persists typed and raw events.
+
+`--address` can be a mint, a bonding curve, or a PumpSwap pool. For clean trade history, prefer the bonding curve or pool address.
+
+---
+
 ## Python library
 
 ```python
@@ -374,6 +410,8 @@ pumpfire api --demo                      # dashboard with fake data
 pumpfire api --db pumpfire.db            # persist to SQLite
 pumpfire decode --log "Program data: …"  # decode a raw log line
 pumpfire decode --program pump_amm --log "…"  # decode an AMM event
+pumpfire replay --file notifications.jsonl --json  # replay saved events
+pumpfire backfill --address <mint-or-pool> --limit 100 --rps 2  # RPC backfill
 pumpfire export --db pumpfire.db --table trades --format csv --out trades.csv
 pumpfire version
 ```
@@ -399,7 +437,8 @@ Every command is safe to pipe. `--json` writes one JSON object per line.
 | `PUMPFIRE_COMMITMENT` | `processed` | `processed`, `confirmed`, or `finalized` |
 | `PUMPFIRE_MIN_SOL` | `0` | Default `--min-sol` for `stream` |
 | `PUMPFIRE_METADATA` | CLI off / API on | `1` enables metadata, `0` disables |
-| `PUMPFIRE_DB` | — | Default SQLite path for `api` and `export` |
+| `PUMPFIRE_DB` | — | Default SQLite path for `api`, `replay`, `backfill`, and `export` |
+| `PUMPFIRE_RPC` | public mainnet | JSON-RPC URL for `backfill` |
 | `PUMPFIRE_LOG_LEVEL` | — | Set a Python logging level (e.g. `DEBUG`) |
 
 CLI flags override env vars. Pin the price for reproducible research:
@@ -513,11 +552,10 @@ Tested on Python 3.10, 3.11, and 3.12.
 
 ## Roadmap
 
-- [ ] PumpSwap AMM event decoding for graduated coins
 - [ ] Prometheus `/metrics`
 - [ ] Postgres sink
 - [ ] Webhook alerts (`min_sol`, new launch, graduation)
-- [ ] Historical backfill from RPC (optional, separate from the firehose)
+- [ ] Replay progress + resume checkpoints
 - [ ] More dashboard views (wallet flow, curve race, launch calendar)
 
 ---
