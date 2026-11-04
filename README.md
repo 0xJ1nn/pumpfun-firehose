@@ -331,15 +331,28 @@ More in [`examples/`](examples/):
 ```bash
 pumpfire stream                          # live terminal firehose
 pumpfire stream --min-sol 1 --buys-only  # only real buys
-pumpfire stream --json                   # JSONL for piping
 pumpfire stream --mint <mint>            # one coin
+pumpfire stream --mint <mint> --mint <mint2>  # repeatable watchlist
+pumpfire stream --watchlist mints.txt    # one mint per line
+pumpfire stream --json                   # JSONL for piping
+pumpfire stream --json --out trades.jsonl  # JSONL to a file
+pumpfire stream --metadata               # opt-in metadata fetches
 pumpfire top --duration 60               # ranked snapshot after 60s
 pumpfire api                             # dashboard + API
+pumpfire api --no-ui                     # API only, no frontend
 pumpfire api --demo                      # dashboard with fake data
 pumpfire api --db pumpfire.db            # persist to SQLite
 pumpfire decode --log "Program data: …"  # decode a raw log line
 pumpfire export --db pumpfire.db --table trades --format csv --out trades.csv
 pumpfire version
+```
+
+`mints.txt` is just one mint per line; blank lines and `#` comments are ignored:
+
+```text
+# my watchlist
+7xvRK69JGaXajoguXJRQGTMmCHqWXLNpvcK27yLpC8Gk
+FePdeU1ZyzRsrNrHut3QdgwRdg81DyqtCJrV4HLKpump
 ```
 
 Every command is safe to pipe. `--json` writes one JSON object per line.
@@ -353,9 +366,10 @@ Every command is safe to pipe. `--json` writes one JSON object per line.
 | `PUMPFIRE_WS` | public endpoints | Comma-separated WSS endpoints |
 | `PUMPFIRE_SOL_USD` | auto | Fixed SOL/USD price (skips the price feed) |
 | `PUMPFIRE_COMMITMENT` | `processed` | `processed`, `confirmed`, or `finalized` |
-| `PUMPFIRE_METADATA` | `1` | Fetch token metadata from `uri` (`0` to disable) |
-| `PUMPFIRE_DB` | — | SQLite path |
-| `PUMPFIRE_LOG_LEVEL` | `INFO` | Log level |
+| `PUMPFIRE_MIN_SOL` | `0` | Default `--min-sol` for `stream` |
+| `PUMPFIRE_METADATA` | CLI off / API on | `1` enables metadata, `0` disables |
+| `PUMPFIRE_DB` | — | Default SQLite path for `api` and `export` |
+| `PUMPFIRE_LOG_LEVEL` | — | Set a Python logging level (e.g. `DEBUG`) |
 
 CLI flags override env vars. Pin the price for reproducible research:
 

@@ -6,8 +6,6 @@ no keys, credentials, or private endpoints in this module.
 
 from __future__ import annotations
 
-import os
-
 # The pump.fun bonding-curve program. One `logsSubscribe` that mentions this
 # program receives every trade and every launch on the curve.
 PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
@@ -46,15 +44,6 @@ MAX_LEG_SOL = 10_000.0
 
 # The public endpoint rate-limits; a gap longer than this is reported as stale.
 DEFAULT_STALE_AFTER_S = 45.0
-
-# Metadata enrichment is on by default for the API/dashboard. It can be turned
-# off with --no-metadata or PUMPFIRE_METADATA=0.
-METADATA_ENABLED = os.environ.get("PUMPFIRE_METADATA", "1").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
 
 # Maximum number of wallets remembered per coin for exact unique counts.
 UNIQUE_WALLET_CAP = 5_000

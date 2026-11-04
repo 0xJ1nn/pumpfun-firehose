@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Annotated, Any
@@ -54,6 +55,33 @@ def _fixed_price(value: float) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_watchlist(path: Path | None) -> set[str]:
+    if path is None:
+        return set()
+    if not path.exists():
+        raise typer.BadParameter(f"no such watchlist: {path}")
+    mints: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            mints.add(line)
+    return mints
 
 
 def _build_book(max_coins: int) -> CoinBook:
@@ -217,30 +245,61 @@ async def _wait(seconds: float) -> None:
 @app.command()
 def stream(
     ws: Annotated[str | None, typer.Option(help="Comma-separated WSS endpoints.")] = None,
-    commitment: Annotated[str, typer.Option(help="processed, confirmed, or finalized.")] = "processed",
+    commitment: Annotated[
+        str,
+        typer.Option(help="processed, confirmed, or finalized."),
+    ] = os.environ.get("PUMPFIRE_COMMITMENT", "processed"),
     min_sol: Annotated[
         float,
         typer.Option("--min-sol", help="Only show trades at or above this SOL size."),
-    ] = 0.0,
+    ] = _env_float("PUMPFIRE_MIN_SOL", 0.0),
     buys_only: Annotated[bool, typer.Option("--buys-only", help="Only show buys.")] = False,
     sells_only: Annotated[bool, typer.Option("--sells-only", help="Only show sells.")] = False,
-    mint: Annotated[str | None, typer.Option(help="Only show this mint.")] = None,
+    mint: Annotated[
+        list[str] | None,
+        typer.Option("--mint", "-m", help="Only show these mints (repeatable)."),
+    ] = None,
+    watchlist: Annotated[
+        Path | None,
+        typer.Option("--watchlist", help="File with one mint per line (# comments allowed)."),
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSONL instead of the TUI.")] = False,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Write JSONL to a file (requires --json)."),
+    ] = None,
     duration: Annotated[float, typer.Option(help="Stop after N seconds (0 = forever).")] = 0.0,
     limit: Annotated[int, typer.Option(help="Rows in the TUI.")] = 15,
-    no_metadata: Annotated[
-        bool,
-        typer.Option("--no-metadata", help="Skip token metadata fetches."),
-    ] = False,
+    metadata: Annotated[
+        bool | None,
+        typer.Option("--metadata/--no-metadata", help="Fetch token metadata (off by default)."),
+    ] = None,
     sol_usd: Annotated[
         float,
         typer.Option("--sol-usd", help="Pin SOL/USD instead of fetching it."),
     ] = 0.0,
 ) -> None:
     """Watch the firehose in your terminal."""
+    if out is not None and not as_json:
+        raise typer.BadParameter("--out requires --json")
+    mints = set(mint or []) | _read_watchlist(watchlist)
     book = _build_book(10_000)
-    metadata = _build_metadata(book, not no_metadata)
-    solprice = SolPrice(book, fixed=_fixed_price(sol_usd))
+    metadata_enabled = (
+        _env_bool("PUMPFIRE_METADATA", False) if metadata is None else metadata
+    )
+    metadata_fetcher = _build_metadata(book, metadata_enabled)
+    fixed_price = _fixed_price(sol_usd)
+    solprice = None
+    if fixed_price is not None:
+        solprice = SolPrice(book, fixed=fixed_price)
+    elif not as_json:
+        solprice = SolPrice(book)
+
+    output = sys.stdout
+    close_output = False
+    if as_json and out is not None and str(out) != "-":
+        output = out.open("a", encoding="utf-8")
+        close_output = True
 
     def matches(event: Any) -> bool:
         if event.kind != "trade":
@@ -251,22 +310,23 @@ def stream(
             return False
         if sells_only and event.is_buy:
             return False
-        return not (mint and event.mint != mint)
+        return not (mints and event.mint not in mints)
 
     async def on_event(event: Any) -> None:
         if as_json and matches(event):
-            print(json.dumps(event.as_dict(), separators=(",", ":")), flush=True)
+            print(json.dumps(event.as_dict(), separators=(",", ":")), file=output, flush=True)
 
     firehose = _build_firehose(
         book,
         ws=ws,
         commitment=commitment,
-        metadata=metadata,
+        metadata=metadata_fetcher,
         on_event=on_event if as_json else None,
     )
 
     async def run() -> None:
-        await solprice.start()
+        if solprice is not None:
+            await solprice.start()
         await firehose.start()
         try:
             if as_json:
@@ -283,7 +343,10 @@ def stream(
                         await asyncio.sleep(0.25)
         finally:
             await firehose.stop()
-            await solprice.stop()
+            if solprice is not None:
+                await solprice.stop()
+            if close_output:
+                output.close()
 
     try:
         asyncio.run(run())
@@ -297,7 +360,10 @@ def api(
     host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Bind port.")] = 8000,
     ws: Annotated[str | None, typer.Option(help="Comma-separated WSS endpoints.")] = None,
-    commitment: Annotated[str, typer.Option(help="processed, confirmed, or finalized.")] = "processed",
+    commitment: Annotated[
+        str,
+        typer.Option(help="processed, confirmed, or finalized."),
+    ] = os.environ.get("PUMPFIRE_COMMITMENT", "processed"),
     db: Annotated[Path | None, typer.Option(help="Persist trades/coins to SQLite.")] = None,
     no_metadata: Annotated[bool, typer.Option("--no-metadata", help="Skip token metadata fetches.")] = False,
     sol_usd: Annotated[float, typer.Option("--sol-usd", help="Pin SOL/USD instead of fetching it.")] = 0.0,
@@ -320,6 +386,8 @@ def api(
         )
         raise typer.Exit(code=1) from exc
 
+    if db is None and os.environ.get("PUMPFIRE_DB"):
+        db = Path(os.environ["PUMPFIRE_DB"])
     book = _build_book(max_coins)
     if demo:
         demo_feed: DemoFeed | None = DemoFeed(book)
@@ -328,7 +396,8 @@ def api(
         metadata = None
     else:
         demo_feed = None
-        metadata = _build_metadata(book, not no_metadata)
+        metadata_enabled = _env_bool("PUMPFIRE_METADATA", True) and not no_metadata
+        metadata = _build_metadata(book, metadata_enabled)
         firehose = _build_firehose(book, ws=ws, commitment=commitment, metadata=metadata)
         solprice = SolPrice(book, fixed=_fixed_price(sol_usd))
     store = SQLiteStore(db) if db is not None else None
@@ -355,7 +424,10 @@ def top(
     limit: Annotated[int, typer.Option(help="Rows to print.")] = 20,
     sort: Annotated[str, typer.Option(help="mcap | volume | gainers | new | trades | curve")] = "mcap",
     ws: Annotated[str | None, typer.Option(help="Comma-separated WSS endpoints.")] = None,
-    commitment: Annotated[str, typer.Option(help="processed, confirmed, or finalized.")] = "processed",
+    commitment: Annotated[
+        str,
+        typer.Option(help="processed, confirmed, or finalized."),
+    ] = os.environ.get("PUMPFIRE_COMMITMENT", "processed"),
     sol_usd: Annotated[float, typer.Option("--sol-usd", help="Pin SOL/USD instead of fetching it.")] = 0.0,
 ) -> None:
     """Listen for a while, then print a ranked snapshot."""
@@ -470,12 +542,20 @@ def decode(
 # ── export ─────────────────────────────────────────────────────────────
 @app.command()
 def export(
-    db: Annotated[Path, typer.Option(help="SQLite database written by `pumpfire api --db`.")],
+    db: Annotated[
+        Path | None,
+        typer.Option(help="SQLite database written by `pumpfire api --db`."),
+    ] = None,
     table: Annotated[str, typer.Option(help="trades | creates | completes | coins")] = "trades",
     fmt: Annotated[str, typer.Option("--format", help="csv | jsonl")] = "csv",
     out: Annotated[str, typer.Option(help="Output path, or - for stdout.")] = "-",
 ) -> None:
     """Export a persisted table to CSV or JSONL."""
+    if db is None:
+        env_db = os.environ.get("PUMPFIRE_DB")
+        if not env_db:
+            raise typer.BadParameter("--db is required (or set PUMPFIRE_DB)")
+        db = Path(env_db)
     if not db.exists():
         raise typer.BadParameter(f"no such database: {db}")
     count = export_table(db, table, fmt=fmt, out=out)
