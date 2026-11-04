@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PumpFire — the pump.fun firehose</title>
+  <meta name="description" content="Every pump.fun trade, decoded straight from the chain. No API keys, no scraper." />
+  <style>
+    :root {
+      --bg: #08090d;
+      --panel: #0e1016;
+      --panel-2: #12151d;
+      --line: #1e2230;
+      --line-2: #2a3042;
+      --text: #e8ecf4;
+      --muted: #8a93a6;
+      --dim: #5d6577;
+      --green: #14f195;
+      --green-2: #00d98b;
+      --purple: #9945ff;
+      --pink: #ff3d9a;
+      --red: #ff5c72;
+      --yellow: #ffd166;
+      --blue: #5aa9ff;
+      --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+    body {
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--green); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    button, input { font: inherit; }
+    ::selection { background: rgba(20, 241, 149, .25); }
+
+    .wrap { max-width: 1480px; margin: 0 auto; padding: 0 22px 40px; }
+
+    /* ── top bar ─────────────────────────────────────────────── */
+    .topbar {
+      position: sticky; top: 0; z-index: 30;
+      background: rgba(8, 9, 13, .86);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--line);
+    }
+    .topbar-inner {
+      max-width: 1480px; margin: 0 auto; padding: 14px 22px;
+      display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: .14em; font-size: 15px; }
+    .brand .flame { font-size: 18px; filter: saturate(1.2); }
+    .brand span { color: var(--green); }
+    .brand small { color: var(--dim); font-weight: 500; letter-spacing: 0; font-size: 11px; margin-left: 4px; }
+    .status {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 5px 10px; border: 1px solid var(--line-2); border-radius: 999px;
+      font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted);
+      background: var(--panel);
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+    .status.live .dot { background: var(--green); box-shadow: 0 0 0 4px rgba(20, 241, 149, .12); }
+    .status.warn .dot { background: var(--yellow); box-shadow: 0 0 0 4px rgba(255, 209, 102, .12); }
+    .status.off .dot { background: var(--red); box-shadow: 0 0 0 4px rgba(255, 92, 114, .12); }
+    .status.live { color: var(--green); border-color: rgba(20, 241, 149, .28); }
+    .status.warn { color: var(--yellow); border-color: rgba(255, 209, 102, .28); }
+    .status.off { color: var(--red); border-color: rgba(255, 92, 114, .28); }
+    .spacer { flex: 1; }
+    .nav { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--muted); }
+    .nav a { color: var(--muted); }
+    .nav a:hover { color: var(--text); }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      border: 1px solid var(--line-2); background: var(--panel);
+      padding: 6px 10px; border-radius: 999px; font-size: 11px; color: var(--muted);
+    }
+    .pill b { color: var(--text); font-weight: 600; }
+
+    /* ── hero stats ──────────────────────────────────────────── */
+    .hero { padding: 22px 0 6px; display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+    .hero h1 { margin: 0; font-size: clamp(24px, 3vw, 40px); line-height: 1.05; letter-spacing: -.03em; }
+    .hero h1 em { font-style: normal; color: var(--green); }
+    .hero p { margin: 8px 0 0; color: var(--muted); max-width: 720px; font-size: 13px; }
+    .hero .meta { display: flex; gap: 8px; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 10px; border-radius: 999px; font-size: 11px;
+      border: 1px solid var(--line-2); color: var(--muted); background: var(--panel);
+    }
+    .badge.green { color: var(--green); border-color: rgba(20, 241, 149, .25); }
+    .badge.purple { color: #c9a7ff; border-color: rgba(153, 69, 255, .28); }
+
+    .stats {
+      display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px; margin: 18px 0 16px;
+    }
+    .stat {
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 13px 14px; min-width: 0;
+    }
+    .stat .k { color: var(--dim); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; }
+    .stat .v { margin-top: 5px; font-size: 20px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stat .s { margin-top: 2px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stat .v.green { color: var(--green); }
+    .stat .v.red { color: var(--red); }
+    .stat .v.purple { color: #c9a7ff; }
+
+    /* ── layout ──────────────────────────────────────────────── */
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 14px; align-items: start; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 12px 14px; border-bottom: 1px solid var(--line);
+    }
+    .panel-head h2 { margin: 0; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+    .panel-head .sub { color: var(--dim); font-size: 11px; }
+    .panel-head .spacer { flex: 1; }
+    .search {
+      background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text);
+      border-radius: 9px; padding: 7px 10px; min-width: 250px; max-width: 100%; outline: none;
+    }
+    .search:focus { border-color: rgba(20, 241, 149, .5); box-shadow: 0 0 0 3px rgba(20, 241, 149, .08); }
+    .search::placeholder { color: var(--dim); }
+    .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+    .tab {
+      background: transparent; border: 1px solid transparent; color: var(--muted);
+      padding: 6px 9px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 600;
+    }
+    .tab:hover { color: var(--text); background: var(--panel-2); }
+    .tab.active { color: var(--green); background: rgba(20, 241, 149, .08); border-color: rgba(20, 241, 149, .18); }
+
+    /* ── table ───────────────────────────────────────────────── */
+    .table-wrap { overflow: auto; max-height: 620px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead th {
+      position: sticky; top: 0; z-index: 2;
+      background: #0b0d12; color: var(--dim);
+      font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+      text-align: right; padding: 9px 10px; border-bottom: 1px solid var(--line);
+      white-space: nowrap; font-weight: 700;
+    }
+    thead th:first-child, thead th:nth-child(2) { text-align: left; }
+    tbody td { padding: 9px 10px; border-bottom: 1px solid rgba(30, 34, 48, .65); text-align: right; white-space: nowrap; }
+    tbody td:first-child, tbody td:nth-child(2) { text-align: left; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: rgba(255, 255, 255, .025); }
+    tbody tr:last-child td { border-bottom: 0; }
+    .rank { color: var(--dim); font-family: var(--mono); font-size: 11px; width: 34px; }
+    .coin { display: flex; align-items: center; gap: 9px; min-width: 190px; }
+    .avatar {
+      position: relative; width: 30px; height: 30px; border-radius: 9px; flex: 0 0 auto;
+      display: grid; place-items: center; font-weight: 800; font-size: 12px;
+      background: hsl(var(--h, 160) 55% 14%);
+      color: hsl(var(--h, 160) 85% 70%);
+      border: 1px solid hsl(var(--h, 160) 55% 24%);
+      overflow: hidden;
+    }
+    .avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .coin .name { font-weight: 600; color: var(--text); max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+    .coin .sym { color: var(--dim); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+    .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); }
+    .dim { color: var(--dim); }
+    .green { color: var(--green); }
+    .red { color: var(--red); }
+    .buy { color: var(--green); }
+    .sell { color: var(--pink); }
+    .bar { display: inline-flex; align-items: center; gap: 7px; min-width: 92px; justify-content: flex-end; }
+    .bar .track { width: 58px; height: 5px; border-radius: 999px; background: var(--line-2); overflow: hidden; }
+    .bar .fill { display: block; height: 100%; background: var(--green); border-radius: 999px; }
+    .bar .pct { font-family: var(--mono); font-size: 10px; color: var(--muted); width: 34px; text-align: right; }
+    .empty { padding: 34px 16px; text-align: center; color: var(--dim); }
+
+    /* ── right column ────────────────────────────────────────── */
+    .right { display: grid; gap: 14px; }
+    .tape { max-height: 390px; overflow: auto; }
+    .trade {
+      display: grid; grid-template-columns: 54px minmax(0, 1fr) 68px 78px;
+      gap: 7px; align-items: center;
+      padding: 7px 12px; border-bottom: 1px solid rgba(30, 34, 48, .55);
+      font-size: 11px; cursor: pointer;
+    }
+    .trade:hover { background: rgba(255, 255, 255, .025); }
+    .trade:last-child { border-bottom: 0; }
+    .trade .t { color: var(--dim); font-family: var(--mono); font-size: 10px; }
+    .trade .m { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .trade .m b { font-weight: 600; }
+    .trade .m small { color: var(--dim); margin-left: 4px; }
+    .trade .amt { text-align: right; font-family: var(--mono); }
+    .trade .px { text-align: right; font-family: var(--mono); color: var(--muted); font-size: 10px; }
+    .side {
+      display: inline-block; min-width: 34px; text-align: center;
+      padding: 2px 5px; border-radius: 5px; font-size: 9px; font-weight: 800; letter-spacing: .06em;
+    }
+    .side.buy { background: rgba(20, 241, 149, .1); color: var(--green); }
+    .side.sell { background: rgba(255, 61, 154, .1); color: var(--pink); }
+
+    .launches { max-height: 290px; overflow: auto; }
+    .launch {
+      display: flex; align-items: center; gap: 9px;
+      padding: 8px 12px; border-bottom: 1px solid rgba(30, 34, 48, .55); cursor: pointer;
+    }
+    .launch:hover { background: rgba(255, 255, 255, .025); }
+    .launch:last-child { border-bottom: 0; }
+    .launch .avatar { width: 26px; height: 26px; border-radius: 8px; font-size: 10px; }
+    .launch .name { font-weight: 600; font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .launch .sym { color: var(--dim); font-size: 10px; text-transform: uppercase; }
+    .launch .age { margin-left: auto; color: var(--dim); font-family: var(--mono); font-size: 10px; }
+
+    /* ── modal ───────────────────────────────────────────────── */
+    .backdrop {
+      position: fixed; inset: 0; z-index: 60; background: rgba(3, 4, 8, .72);
+      backdrop-filter: blur(6px); display: none; align-items: flex-start; justify-content: center;
+      padding: 48px 18px; overflow: auto;
+    }
+    .backdrop.open { display: flex; }
+    .modal {
+      width: min(920px, 100%); background: var(--panel); border: 1px solid var(--line-2);
+      border-radius: 18px; box-shadow: 0 30px 80px rgba(0, 0, 0, .55); overflow: hidden;
+    }
+    .modal-head { display: flex; align-items: flex-start; gap: 14px; padding: 18px; border-bottom: 1px solid var(--line); }
+    .modal-head .avatar { width: 52px; height: 52px; border-radius: 14px; font-size: 18px; }
+    .modal-head h3 { margin: 0; font-size: 21px; letter-spacing: -.02em; }
+    .modal-head .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .modal-head .spacer { flex: 1; }
+    .close {
+      background: var(--panel-2); border: 1px solid var(--line-2); color: var(--muted);
+      width: 32px; height: 32px; border-radius: 9px; cursor: pointer; font-size: 16px; line-height: 1;
+    }
+    .close:hover { color: var(--text); border-color: var(--line-2); }
+    .modal-body { padding: 18px; display: grid; gap: 16px; }
+    .mintline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .copy {
+      background: var(--panel-2); border: 1px solid var(--line-2); color: var(--muted);
+      border-radius: 7px; padding: 4px 8px; cursor: pointer; font-size: 10px;
+    }
+    .copy:hover { color: var(--green); border-color: rgba(20, 241, 149, .3); }
+    .socials { display: flex; gap: 8px; flex-wrap: wrap; }
+    .socials a {
+      font-size: 11px; color: var(--muted); border: 1px solid var(--line-2);
+      padding: 4px 8px; border-radius: 7px; background: var(--panel-2);
+    }
+    .socials a:hover { color: var(--green); border-color: rgba(20, 241, 149, .3); text-decoration: none; }
+    .detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .detail {
+      background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px;
+      min-width: 0;
+    }
+    .detail .k { color: var(--dim); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; }
+    .detail .v { margin-top: 3px; font-family: var(--mono); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .desc { color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .curvebox { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    .curvebox .top { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
+    .curvebox .track { height: 8px; background: var(--line-2); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+    .curvebox .fill { height: 100%; background: var(--green); border-radius: 999px; }
+    .modal table { font-size: 11px; }
+    .modal thead th { position: static; background: transparent; }
+    .modal .table-wrap { max-height: 260px; border: 1px solid var(--line); border-radius: 10px; }
+
+    /* ── footer ──────────────────────────────────────────────── */
+    footer {
+      margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line);
+      display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      color: var(--dim); font-size: 11px;
+    }
+    footer .links { display: flex; gap: 14px; flex-wrap: wrap; }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--green); }
+
+    .toast {
+      position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px);
+      background: var(--panel-2); border: 1px solid var(--line-2); color: var(--text);
+      padding: 9px 14px; border-radius: 10px; font-size: 12px; opacity: 0; pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease; z-index: 100;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    @media (max-width: 1180px) {
+      .grid { grid-template-columns: 1fr; }
+      .right { grid-template-columns: 1fr 1fr; }
+      .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      .wrap { padding: 0 12px 28px; }
+      .topbar-inner { padding: 12px; gap: 10px; }
+      .nav { display: none; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .right { grid-template-columns: 1fr; }
+      .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hide-sm { display: none; }
+      .coin .name { max-width: 120px; }
+      .table-wrap { max-height: 520px; }
+      .modal { border-radius: 14px; }
+      .backdrop { padding: 18px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><span class="flame">🔥</span> PUMP<span>FIRE</span> <small>the pump.fun firehose</small></div>
+      <div id="status" class="status warn"><span class="dot"></span><span id="statusText">CONNECTING</span></div>
+      <div id="modeBadge" class="pill" style="display:none"><b>DEMO</b> data</div>
+      <div class="spacer"></div>
+      <div class="nav">
+        <a href="/docs" target="_blank" rel="noopener">API docs</a>
+        <a href="https://github.com/0xJ1nn/pumpfun-firehose" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/0xJ1nn/pumpfun-firehose#-support-the-firehose" target="_blank" rel="noopener">Donate</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <section class="hero">
+      <div>
+        <h1>Every pump.fun trade.<br /><em>Straight from the chain.</em></h1>
+        <p>One <code>logsSubscribe</code> call. Every buy, every sell, every launch — decoded from the pump.fun program's own Anchor events. No API key, no scraper, no RPC round-trip.</p>
+      </div>
+      <div class="meta">
+        <span class="badge green">● zero keys</span>
+        <span class="badge purple">● exact curve reserves</span>
+        <span class="badge">● websocket + http</span>
+      </div>
+    </section>
+
+    <section class="stats" id="stats">
+      <div class="stat"><div class="k">Live coins</div><div class="v" id="sCoins">—</div><div class="s" id="sCoinsSub">tracked in memory</div></div>
+      <div class="stat"><div class="k">Trades</div><div class="v green" id="sTrades">—</div><div class="s" id="sTradesSub">this session</div></div>
+      <div class="stat"><div class="k">Volume</div><div class="v" id="sVolume">—</div><div class="s" id="sVolumeSub">SOL traded</div></div>
+      <div class="stat"><div class="k">Launches</div><div class="v purple" id="sLaunches">—</div><div class="s" id="sLaunchesSub">new coins seen</div></div>
+      <div class="stat"><div class="k">Graduated</div><div class="v" id="sGrad">—</div><div class="s" id="sGradSub">left the curve</div></div>
+      <div class="stat"><div class="k">SOL / USD</div><div class="v" id="sSol">—</div><div class="s" id="sSolSub">spot reference</div></div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Coins</h2>
+          <span class="sub" id="coinCount">—</span>
+          <div class="spacer"></div>
+          <input id="search" class="search" type="search" placeholder="Search name, symbol, mint…" autocomplete="off" />
+        </div>
+        <div class="panel-head" style="border-top:0;padding-top:0">
+          <div class="tabs" id="tabs">
+            <button class="tab active" data-sort="mcap">Trending</button>
+            <button class="tab" data-sort="volume">Volume</button>
+            <button class="tab" data-sort="gainers">Gainers</button>
+            <button class="tab" data-sort="new">New</button>
+            <button class="tab" data-sort="curve">Curve</button>
+            <button class="tab" data-sort="trades">Active</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Coin</th>
+                <th>Price</th>
+                <th>MCap</th>
+                <th class="hide-sm">5m</th>
+                <th class="hide-sm">Vol</th>
+                <th class="hide-sm">B / S</th>
+                <th>Curve</th>
+                <th class="hide-sm">Age</th>
+              </tr>
+            </thead>
+            <tbody id="coinsBody">
+              <tr><td colspan="9" class="empty">Waiting for the firehose…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="right">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Live trades</h2>
+            <span class="sub" id="tapeCount">—</span>
+            <div class="spacer"></div>
+            <span class="badge green" id="tapeRate">0/s</span>
+          </div>
+          <div class="tape" id="tape">
+            <div class="empty">No trades yet.</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>New launches</h2>
+            <span class="sub" id="launchCount">—</span>
+          </div>
+          <div class="launches" id="launches">
+            <div class="empty">No launches yet.</div>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <footer>
+      <div>PumpFire · data from the pump.fun program firehose · no API keys · not financial advice</div>
+      <div class="links">
+        <a href="/docs" target="_blank" rel="noopener">API</a>
+        <a href="https://github.com/0xJ1nn/pumpfun-firehose" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/0xJ1nn/pumpfun-firehose#-support-the-firehose" target="_blank" rel="noopener">Support</a>
+      </div>
+    </footer>
+  </div>
+
+  <div class="backdrop" id="backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+      <div class="modal-head">
+        <div class="avatar" id="mAvatar" style="--h:160">?</div>
+        <div style="min-width:0">
+          <h3 id="mTitle">—</h3>
+          <div class="sub" id="mSub">—</div>
+        </div>
+        <div class="spacer"></div>
+        <button class="close" id="mClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="mintline">
+          <span id="mMint">—</span>
+          <button class="copy" id="mCopy">copy</button>
+          <span class="spacer"></span>
+          <div class="socials" id="mSocials"></div>
+        </div>
+        <div class="detail-grid" id="mDetails"></div>
+        <div class="curvebox">
+          <div class="top"><span>Bonding curve</span><span id="mCurvePct">—</span></div>
+          <div class="track"><div class="fill" id="mCurveFill" style="width:0%"></div></div>
+        </div>
+        <div class="desc" id="mDesc"></div>
+        <div>
+          <div class="panel-head" style="padding:0 0 8px;border:0"><h2 style="font-size:11px">Recent trades</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Time</th><th>Side</th><th>SOL</th><th>Price</th><th>Wallet</th></tr></thead>
+              <tbody id="mTrades"><tr><td colspan="5" class="empty">—</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    "use strict";
+
+    const state = {
+      coins: [],
+      trades: [],
+      creates: [],
+      stats: {},
+      sol: 0,
+      mode: "live",
+      sort: "mcap",
+      q: "",
+      selected: null,
+      ws: null,
+      wsConnected: false,
+      wsRetry: 0,
+      pollTimer: null,
+      detailTimer: null,
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function esc(value) {
+      return String(value == null ? "" : value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function safeUrl(value) {
+      if (!value || typeof value !== "string") return "";
+      try {
+        const url = new URL(value, location.origin);
+        if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+        const host = url.hostname.toLowerCase();
+        if (
+          host === "localhost" ||
+          host === "0.0.0.0" ||
+          host === "::1" ||
+          host.endsWith(".local") ||
+          host.endsWith(".internal") ||
+          /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
+        ) {
+          return "";
+        }
+        return url.href;
+      } catch (_) {}
+      return "";
+    }
+
+    function fmtNum(value, digits = 2) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "—";
+      return n.toLocaleString(undefined, { maximumFractionDigits: digits });
+    }
+
+    function fmtUsd(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) return "—";
+      if (n >= 1e9) return "$" + (n / 1e9).toFixed(2) + "B";
+      if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
+      if (n >= 1e3) return "$" + (n / 1e3).toFixed(2) + "K";
+      if (n >= 1) return "$" + n.toFixed(2);
+      if (n >= 0.01) return "$" + n.toFixed(4);
+      return "$" + n.toPrecision(3);
+    }
+
+    function fmtSol(value, digits = 3) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "—";
+      if (n >= 1e3) return (n / 1e3).toFixed(2) + "K";
+      return n.toFixed(digits);
+    }
+
+    function fmtPrice(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) return "—";
+      if (n >= 1) return n.toFixed(4);
+      if (n >= 0.01) return n.toFixed(6);
+      if (n >= 0.0001) return n.toFixed(8);
+      return n.toExponential(2);
+    }
+
+    function fmtCoinPrice(coin) {
+      if (coin.price_usd) return "$" + fmtPrice(coin.price_usd);
+      return fmtPrice(coin.price_sol) + "◎";
+    }
+
+    function fmtPct(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "—";
+      const sign = n > 0 ? "+" : "";
+      return sign + n.toFixed(1) + "%";
+    }
+
+    function pctClass(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n === 0) return "dim";
+      return n > 0 ? "green" : "red";
+    }
+
+    function fmtAge(seconds) {
+      const n = Number(seconds);
+      if (!Number.isFinite(n) || n < 0) return "—";
+      if (n < 60) return Math.floor(n) + "s";
+      if (n < 3600) return Math.floor(n / 60) + "m";
+      if (n < 86400) return Math.floor(n / 3600) + "h";
+      return Math.floor(n / 86400) + "d";
+    }
+
+    function shortMint(mint) {
+      if (!mint) return "—";
+      return mint.slice(0, 4) + "…" + mint.slice(-4);
+    }
+
+    function hueFor(text) {
+      let h = 0;
+      const s = String(text || "");
+      for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+      return h;
+    }
+
+    function avatarHtml(coin, cls = "avatar") {
+      const symbol = (coin.symbol || coin.name || coin.mint || "?").slice(0, 2).toUpperCase();
+      const image = coin.metadata && safeUrl(coin.metadata.image);
+      const hue = hueFor(coin.mint || symbol);
+      return `<div class="${cls}" style="--h:${hue}"><span>${esc(symbol.slice(0, 1))}</span>${image ? `<img src="${esc(image)}" alt="" loading="lazy" onerror="this.remove()" />` : ""}</div>`;
+    }
+
+    function coinByMint(mint) {
+      return state.coins.find((coin) => coin.mint === mint) || null;
+    }
+
+    function tradeMcap(trade) {
+      const vs = Number(trade.virtual_sol);
+      const vt = Number(trade.virtual_token);
+      if (!Number.isFinite(vs) || !Number.isFinite(vt) || vt <= 0) return 0;
+      const supply = 1e9;
+      return (vs / vt) * supply * (state.sol || 0);
+    }
+
+    function setStatus(kind, text) {
+      const el = $("status");
+      el.className = "status " + kind;
+      $("statusText").textContent = text;
+    }
+
+    function toast(message) {
+      const el = $("toast");
+      el.textContent = message;
+      el.classList.add("show");
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => el.classList.remove("show"), 1600);
+    }
+
+    // ── rendering ──────────────────────────────────────────────────────
+    function renderStats() {
+      const s = state.stats || {};
+      $("sCoins").textContent = fmtNum(s.coins || 0, 0);
+      $("sCoinsSub").textContent = (s.graduated || 0) + " graduated";
+      $("sTrades").textContent = fmtNum(s.trades || 0, 0);
+      $("sTradesSub").textContent = (s.trades_per_sec || 0).toFixed(1) + " trades/s";
+      $("sVolume").textContent = fmtSol(s.volume_sol || 0, 1) + " SOL";
+      $("sVolumeSub").textContent = state.sol ? fmtUsd((s.volume_sol || 0) * state.sol) : "SOL-denominated";
+      $("sLaunches").textContent = fmtNum(s.creates || 0, 0);
+      $("sLaunchesSub").textContent = "new coins seen";
+      $("sGrad").textContent = fmtNum(s.graduated || 0, 0);
+      $("sGradSub").textContent = "left the curve";
+      $("sSol").textContent = state.sol ? "$" + state.sol.toFixed(2) : "—";
+      $("sSolSub").textContent = state.sol ? "spot reference" : "price feed offline";
+      $("tapeRate").textContent = (s.trades_per_sec || 0).toFixed(1) + "/s";
+      $("tapeCount").textContent = fmtNum(s.trades || 0, 0) + " total";
+      $("launchCount").textContent = fmtNum(s.creates || 0, 0) + " total";
+      $("coinCount").textContent = fmtNum(s.coins || state.coins.length, 0) + " tracked";
+    }
+
+    function renderCoins() {
+      const body = $("coinsBody");
+      if (!state.coins.length) {
+        body.innerHTML = `<tr><td colspan="9" class="empty">No coins match that filter.</td></tr>`;
+        return;
+      }
+      body.innerHTML = state.coins.map((coin, index) => {
+        const change = coin.change_5m_pct;
+        const curve = Math.max(0, Math.min(100, Number(coin.curve_progress_pct) || 0));
+        return `<tr data-mint="${esc(coin.mint)}">
+          <td class="rank">${index + 1}</td>
+          <td>
+            <div class="coin">
+              ${avatarHtml(coin)}
+              <div style="min-width:0">
+                <div class="name">${esc(coin.name || coin.symbol || shortMint(coin.mint))}</div>
+                <div class="sym">${esc(coin.symbol || "—")} · ${esc(shortMint(coin.mint))}</div>
+              </div>
+            </div>
+          </td>
+          <td class="num">${fmtCoinPrice(coin)}</td>
+          <td class="num">${coin.market_cap_usd ? fmtUsd(coin.market_cap_usd) : fmtSol(coin.market_cap_sol, 1) + "◎"}</td>
+          <td class="num ${pctClass(change)} hide-sm">${fmtPct(change)}</td>
+          <td class="num hide-sm">${fmtSol(coin.volume_sol, 2)}◎</td>
+          <td class="num hide-sm"><span class="buy">${fmtNum(coin.buys, 0)}</span><span class="dim">/</span><span class="sell">${fmtNum(coin.sells, 0)}</span></td>
+          <td><span class="bar"><span class="track"><span class="fill" style="width:${curve}%"></span></span><span class="pct">${curve.toFixed(0)}%</span></span></td>
+          <td class="num dim hide-sm">${fmtAge(coin.age_s)}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    function renderTape() {
+      const tape = $("tape");
+      if (!state.trades.length) {
+        tape.innerHTML = `<div class="empty">No trades yet.</div>`;
+        return;
+      }
+      tape.innerHTML = state.trades.map((trade) => {
+        const coin = coinByMint(trade.mint);
+        const symbol = coin ? (coin.symbol || coin.name) : shortMint(trade.mint);
+        const side = trade.is_buy ? "BUY" : "SELL";
+        const cls = trade.is_buy ? "buy" : "sell";
+        const ts = Number(trade.timestamp || trade.seen_ts || 0);
+        const time = ts ? new Date(ts * 1000).toLocaleTimeString([], { hour12: false }) : "—";
+        const mcap = tradeMcap(trade);
+        return `<div class="trade" data-mint="${esc(trade.mint)}">
+          <div class="t">${esc(time)}</div>
+          <div class="m"><span class="side ${cls}">${side}</span> <b>${esc(symbol || "—")}</b><small>${mcap ? fmtUsd(mcap) : ""}</small></div>
+          <div class="amt ${cls}">${fmtSol(trade.sol, 3)}◎</div>
+          <div class="px">${fmtPrice(trade.price_sol)}</div>
+        </div>`;
+      }).join("");
+    }
+
+    function renderLaunches() {
+      const el = $("launches");
+      if (!state.creates.length) {
+        el.innerHTML = `<div class="empty">No launches yet.</div>`;
+        return;
+      }
+      el.innerHTML = state.creates.map((creation) => {
+        const coin = coinByMint(creation.mint);
+        const age = (Date.now() / 1000) - Number(creation.timestamp || creation.seen_ts || Date.now() / 1000);
+        return `<div class="launch" data-mint="${esc(creation.mint)}">
+          ${avatarHtml(coin || creation, "avatar")}
+          <div style="min-width:0">
+            <div class="name">${esc(creation.name || "Untitled")}</div>
+            <div class="sym">${esc(creation.symbol || shortMint(creation.mint))}</div>
+          </div>
+          <div class="age">${fmtAge(age)}</div>
+        </div>`;
+      }).join("");
+    }
+
+    function renderAll() {
+      renderStats();
+      renderCoins();
+      renderTape();
+      renderLaunches();
+    }
+
+    // ── data ───────────────────────────────────────────────────────────
+    async function fetchJson(path) {
+      const response = await fetch(path, { cache: "no-store" });
+      if (!response.ok) throw new Error(path + " -> " + response.status);
+      return response.json();
+    }
+
+    async function loadCoins() {
+      const params = new URLSearchParams({ limit: "60", sort: state.sort });
+      if (state.q) params.set("q", state.q);
+      const data = await fetchJson("/v1/coins?" + params.toString());
+      state.coins = data.coins || [];
+      renderCoins();
+      renderStats();
+    }
+
+    async function loadTape() {
+      const [trades, creates] = await Promise.all([
+        fetchJson("/v1/trades?limit=80"),
+        fetchJson("/v1/creates?limit=30"),
+      ]);
+      state.trades = trades.trades || [];
+      state.creates = creates.creates || [];
+      renderTape();
+      renderLaunches();
+    }
+
+    async function loadStats() {
+      const data = await fetchJson("/v1/stats");
+      state.stats = data.stats || {};
+      state.sol = Number(data.sol_price && data.sol_price.usd) || 0;
+      renderStats();
+    }
+
+    async function boot() {
+      try {
+        const health = await fetchJson("/health");
+        state.mode = health.mode || "live";
+        if (state.mode === "demo") $("modeBadge").style.display = "inline-flex";
+      } catch (_) {}
+      try {
+        await Promise.all([loadStats(), loadCoins(), loadTape()]);
+      } catch (error) {
+        console.warn(error);
+      }
+      connect();
+      startPolling();
+    }
+
+    function startPolling() {
+      if (state.pollTimer) clearInterval(state.pollTimer);
+      state.pollTimer = setInterval(async () => {
+        if (!state.wsConnected) {
+          try { await Promise.all([loadStats(), loadCoins(), loadTape()]); } catch (_) {}
+        }
+      }, 2500);
+    }
+
+    // ── websocket ──────────────────────────────────────────────────────
+    function connect() {
+      if (state.ws) {
+        try { state.ws.close(); } catch (_) {}
+      }
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(proto + "://" + location.host + "/ws");
+      state.ws = ws;
+      ws.onopen = () => {
+        state.wsConnected = true;
+        state.wsRetry = 0;
+        setStatus("live", "LIVE");
+      };
+      ws.onmessage = (event) => {
+        let data;
+        try { data = JSON.parse(event.data); } catch (_) { return; }
+        if (data.type !== "snapshot") return;
+        state.stats = data.stats || state.stats;
+        state.sol = Number(data.sol_price && data.sol_price.usd) || state.sol;
+        state.trades = data.trades || [];
+        state.creates = data.creates || [];
+        if (state.sort === "mcap" && !state.q && Array.isArray(data.coins) && data.coins.length) {
+          state.coins = data.coins;
+        }
+        renderAll();
+      };
+      ws.onclose = () => {
+        state.wsConnected = false;
+        state.wsRetry += 1;
+        setStatus("warn", "RECONNECTING");
+        setTimeout(connect, Math.min(1000 * state.wsRetry, 8000));
+      };
+      ws.onerror = () => {
+        state.wsConnected = false;
+        setStatus("off", "OFFLINE");
+      };
+    }
+
+    // ── detail modal ───────────────────────────────────────────────────
+    async function openCoin(mint) {
+      state.selected = mint;
+      $("backdrop").classList.add("open");
+      $("mTitle").textContent = "Loading…";
+      $("mSub").textContent = shortMint(mint);
+      $("mMint").textContent = mint;
+      $("mDesc").textContent = "";
+      $("mDetails").innerHTML = "";
+      $("mSocials").innerHTML = "";
+      $("mTrades").innerHTML = `<tr><td colspan="5" class="empty">Loading…</td></tr>`;
+      await refreshDetail();
+      if (state.detailTimer) clearInterval(state.detailTimer);
+      state.detailTimer = setInterval(refreshDetail, 2500);
+    }
+
+    function closeCoin() {
+      state.selected = null;
+      $("backdrop").classList.remove("open");
+      if (state.detailTimer) {
+        clearInterval(state.detailTimer);
+        state.detailTimer = null;
+      }
+    }
+
+    async function refreshDetail() {
+      const mint = state.selected;
+      if (!mint) return;
+      let coin;
+      try {
+        coin = await fetchJson("/v1/coins/" + encodeURIComponent(mint) + "?trades=40");
+      } catch (_) {
+        return;
+      }
+      const metadata = coin.metadata || {};
+      const image = safeUrl(metadata.image);
+      const hue = hueFor(coin.mint);
+      $("mAvatar").style.setProperty("--h", hue);
+      $("mAvatar").innerHTML = `<span>${esc((coin.symbol || coin.name || "?").slice(0, 1).toUpperCase())}</span>${image ? `<img src="${esc(image)}" alt="" onerror="this.remove()" />` : ""}`;
+      $("mTitle").textContent = coin.name || coin.symbol || shortMint(coin.mint);
+      $("mSub").textContent = (coin.symbol || "—") + " · " + shortMint(coin.mint) + " · " + fmtAge(coin.age_s);
+      $("mMint").textContent = coin.mint;
+      $("mDesc").textContent = metadata.description || "No description published.";
+      $("mCurvePct").textContent = (Number(coin.curve_progress_pct) || 0).toFixed(1) + "%";
+      $("mCurveFill").style.width = Math.max(0, Math.min(100, Number(coin.curve_progress_pct) || 0)) + "%";
+
+      const details = [
+        ["Price", fmtCoinPrice(coin)],
+        ["MCap", coin.market_cap_usd ? fmtUsd(coin.market_cap_usd) : fmtSol(coin.market_cap_sol, 1) + "◎"],
+        ["Volume", fmtSol(coin.volume_sol, 2) + "◎"],
+        ["5m", fmtPct(coin.change_5m_pct)],
+        ["Buys", fmtNum(coin.buys, 0)],
+        ["Sells", fmtNum(coin.sells, 0)],
+        ["Buyers", fmtNum(coin.unique_buyers, 0) + (coin.unique_capped ? "+" : "")],
+        ["Sellers", fmtNum(coin.unique_sellers, 0) + (coin.unique_capped ? "+" : "")],
+        ["Trades", fmtNum(coin.trade_count, 0)],
+        ["Virtual SOL", fmtSol(coin.virtual_sol, 2) + "◎"],
+        ["Real SOL", fmtSol(coin.real_sol, 2) + "◎"],
+        ["Creator", shortMint(coin.creator)],
+      ];
+      $("mDetails").innerHTML = details.map(([k, v]) =>
+        `<div class="detail"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`
+      ).join("");
+
+      const socials = [];
+      const twitter = safeUrl(metadata.twitter);
+      const telegram = safeUrl(metadata.telegram);
+      const website = safeUrl(metadata.website);
+      if (twitter) socials.push(`<a href="${esc(twitter)}" target="_blank" rel="noopener noreferrer">X / Twitter</a>`);
+      if (telegram) socials.push(`<a href="${esc(telegram)}" target="_blank" rel="noopener noreferrer">Telegram</a>`);
+      if (website) socials.push(`<a href="${esc(website)}" target="_blank" rel="noopener noreferrer">Website</a>`);
+      if (coin.graduated) socials.push(`<span class="badge purple">graduated</span>`);
+      $("mSocials").innerHTML = socials.join("");
+
+      const trades = coin.trades || [];
+      $("mTrades").innerHTML = trades.length ? trades.map((trade) => {
+        const ts = Number(trade.timestamp || trade.seen_ts || 0);
+        const time = ts ? new Date(ts * 1000).toLocaleTimeString([], { hour12: false }) : "—";
+        return `<tr>
+          <td class="num dim">${esc(time)}</td>
+          <td><span class="side ${trade.is_buy ? "buy" : "sell"}">${trade.is_buy ? "BUY" : "SELL"}</span></td>
+          <td class="num ${trade.is_buy ? "buy" : "sell"}">${fmtSol(trade.sol, 3)}◎</td>
+          <td class="num">${fmtPrice(trade.price_sol)}</td>
+          <td class="num dim">${esc(shortMint(trade.user))}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="5" class="empty">No trades in the live buffer.</td></tr>`;
+    }
+
+    // ── events ─────────────────────────────────────────────────────────
+    $("tabs").addEventListener("click", (event) => {
+      const button = event.target.closest(".tab");
+      if (!button) return;
+      state.sort = button.dataset.sort || "mcap";
+      document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab === button));
+      loadCoins().catch(console.warn);
+    });
+
+    let searchTimer;
+    $("search").addEventListener("input", (event) => {
+      state.q = event.target.value.trim();
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => loadCoins().catch(console.warn), 220);
+    });
+
+    $("coinsBody").addEventListener("click", (event) => {
+      const row = event.target.closest("tr[data-mint]");
+      if (row) openCoin(row.dataset.mint);
+    });
+
+    $("tape").addEventListener("click", (event) => {
+      const row = event.target.closest("[data-mint]");
+      if (row) openCoin(row.dataset.mint);
+    });
+
+    $("launches").addEventListener("click", (event) => {
+      const row = event.target.closest("[data-mint]");
+      if (row) openCoin(row.dataset.mint);
+    });
+
+    $("mClose").addEventListener("click", closeCoin);
+    $("backdrop").addEventListener("click", (event) => {
+      if (event.target === $("backdrop")) closeCoin();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeCoin();
+    });
+
+    $("mCopy").addEventListener("click", async () => {
+      const mint = state.selected;
+      if (!mint) return;
+      try {
+        await navigator.clipboard.writeText(mint);
+        toast("Mint copied");
+      } catch (_) {
+        toast("Copy failed");
+      }
+    });
+
+    boot();
+  </script>
+</body>
+</html>
