@@ -7,7 +7,7 @@
 **A clean, self-hosted real-time data layer for pump.fun.**  
 One WebSocket subscription. Every buy, every sell, every launch — decoded from the pump.fun program's own Anchor events. No scraping. No REST polling. No rate-limit tax.
 
-[![Tests](https://img.shields.io/badge/tests-36%20passing-14f195)](#development)
+[![Tests](https://img.shields.io/badge/tests-47%20passing-14f195)](#development)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-14f195)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-9945ff)](LICENSE)
 [![No API key](https://img.shields.io/badge/API%20key-not%20required-ff3d9a)](#why-this-exists)
