@@ -4,7 +4,7 @@
 
 ### Every pump.fun trade. Straight from the chain. Zero API keys.
 
-**The missing real-time data layer for pump.fun.**  
+**A clean, self-hosted real-time data layer for pump.fun.**  
 One WebSocket subscription. Every buy, every sell, every launch — decoded from the pump.fun program's own Anchor events. No scraping. No REST polling. No rate-limit tax.
 
 [![Tests](https://img.shields.io/badge/tests-36%20passing-14f195)](#development)
@@ -385,6 +385,27 @@ Measured on the public endpoints during development:
 Your mileage varies with endpoint load and market activity. The stream is
 bursty: quiet seconds are normal, and a busy minute can deliver thousands of
 notifications.
+
+---
+
+## Prior art
+
+The core trick is **not novel**: `logsSubscribe` on the pump.fun program and decode the Anchor events from the logs. The event layouts are in the public IDL, and several projects already do this.
+
+- [`rckprtr/pumpdotfun-sdk`](https://github.com/rckprtr/pumpdotfun-sdk) — TypeScript SDK with create/trade/complete event listeners.
+- [`0xfnzero/pumpfun-sdk`](https://github.com/0xfnzero/pumpfun-sdk) — Rust SDK with program-log and Yellowstone gRPC subscriptions.
+- [`Dennim89/pumpfun-stream`](https://github.com/Dennim89/pumpfun-stream) — Python `logsSubscribe` → JSONL/SQLite, IDL-driven, with PumpSwap support.
+- [`Humancyyborg/pumpfun_websocket`](https://github.com/Humancyyborg/pumpfun_websocket) — minimal Python `logsSubscribe` example.
+- [`BankkRoll/pumpfun-apis`](https://github.com/BankkRoll/pumpfun-apis) — reverse-engineered pump.fun REST API spec.
+- [PumpPortal](https://pumpportal.fun/data-api/real-time) — hosted real-time stream; launches and migrations are free, trades are metered.
+- [Solana Tracker](https://docs.solanatracker.io/), [Bitquery](https://bitquery.io/), and [Helius](https://helius.dev/) — hosted/paid data APIs.
+- [pump.fun's official API](https://docs.pump.fun/) — read-only profiles, graph, callouts, leaderboards, and wallet positions. It is **not** a real-time trade firehose.
+
+So what is PumpFire? A clean, self-hosted packaging of the public firehose: keyless public-WSS defaults, a live dashboard, an HTTP/WebSocket API, a CLI, a Python library, exact reserves → price/mcap/curve, metadata enrichment, SQLite, and a demo mode. The protocol is public; the ergonomics are the contribution.
+
+**Why not just use PumpPortal?** It is a great hosted option. PumpFire is for when you want to self-host, avoid per-event metering, own the data, and query it locally.
+
+**Why not just use an SDK?** Most SDKs are trading-first. PumpFire is read-only and ships the data surface — dashboard, API, CLI, and library — not a signing path.
 
 ---
 
