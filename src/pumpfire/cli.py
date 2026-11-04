@@ -84,6 +84,25 @@ def _read_watchlist(path: Path | None) -> set[str]:
     return mints
 
 
+def _matches_event(
+    event: Any,
+    *,
+    mints: set[str],
+    min_sol: float,
+    buys_only: bool,
+    sells_only: bool,
+) -> bool:
+    if mints and event.mint not in mints:
+        return False
+    if event.kind != "trade":
+        return True
+    if min_sol and event.sol < min_sol:
+        return False
+    if buys_only and not event.is_buy:
+        return False
+    return not (sells_only and event.is_buy)
+
+
 def _build_book(max_coins: int) -> CoinBook:
     return CoinBook(max_coins=max_coins)
 
@@ -302,15 +321,13 @@ def stream(
         close_output = True
 
     def matches(event: Any) -> bool:
-        if event.kind != "trade":
-            return True
-        if min_sol and event.sol < min_sol:
-            return False
-        if buys_only and not event.is_buy:
-            return False
-        if sells_only and event.is_buy:
-            return False
-        return not (mints and event.mint not in mints)
+        return _matches_event(
+            event,
+            mints=mints,
+            min_sol=min_sol,
+            buys_only=buys_only,
+            sells_only=sells_only,
+        )
 
     async def on_event(event: Any) -> None:
         if as_json and matches(event):
