@@ -122,6 +122,14 @@ def test_dashboard_html() -> None:
     assert "pump.fun" in response.text
 
 
+def test_api_only_mode_skips_dashboard() -> None:
+    api_only = TestClient(create_app(make_book(), serve_ui=False))
+    response = api_only.get("/")
+    assert response.status_code == 200
+    assert "dashboard is disabled" in response.text
+    assert "/v1/coins" in api_only.get("/openapi.json").text
+
+
 def test_websocket_snapshot() -> None:
     with client().websocket_connect("/ws") as ws:
         payload = ws.receive_json()

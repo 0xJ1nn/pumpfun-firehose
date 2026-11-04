@@ -6,7 +6,7 @@ import asyncio
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,10 +14,12 @@ from fastapi.responses import HTMLResponse
 
 from .demo import DemoFeed
 from .firehose import Firehose
-from .metadata import MetadataFetcher
 from .models import CoinBook
-from .solprice import SolPrice
-from .store import SQLiteStore
+
+if TYPE_CHECKING:
+    from .metadata import MetadataFetcher
+    from .solprice import SolPrice
+    from .store import SQLiteStore
 
 _WEB_DIR = Path(__file__).parent / "web"
 
@@ -31,8 +33,13 @@ def create_app(
     metadata: MetadataFetcher | None = None,
     demo: DemoFeed | None = None,
     title: str = "PumpFire",
+    serve_ui: bool = True,
 ) -> FastAPI:
-    """Build the FastAPI app around a live :class:`CoinBook`."""
+    """Build the FastAPI app around a live :class:`CoinBook`.
+
+    ``serve_ui=False`` keeps the HTTP/WebSocket API but skips the dashboard, so
+    the frontend is never compulsory.
+    """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Any:
@@ -208,6 +215,12 @@ def create_app(
     # ── dashboard ───────────────────────────────────────────────────────
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def index() -> HTMLResponse:
+        if not serve_ui:
+            return HTMLResponse(
+                "<h1>PumpFire API</h1>"
+                "<p>The dashboard is disabled. Use <a href='/docs'>/docs</a> "
+                "or the <code>/v1/*</code> endpoints.</p>"
+            )
         path = _WEB_DIR / "index.html"
         if not path.exists():
             return HTMLResponse("<h1>PumpFire</h1><p>Dashboard asset is missing.</p>", status_code=500)

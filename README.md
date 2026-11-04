@@ -43,6 +43,7 @@ PumpFire turns that stream into a clean, queryable feed:
 - 🔌 **Three ways in** — CLI, HTTP/WebSocket API, Python library
 - 🧠 **Zero RPC** — the event carries everything; no `getTransaction` per trade
 - 🆓 **Zero keys** — free public Solana WebSocket endpoints by default
+- 🪶 **Lightweight by default** — core install is one dependency; the dashboard, API, metadata, and SQLite are extras
 - 💾 **Optional SQLite** — batch-persisted, non-blocking, ready for research
 
 > **Not financial advice.** This is a data tool, not a trading bot. It never signs, never trades, and never touches a wallet.
@@ -56,7 +57,34 @@ git clone https://github.com/0xJ1nn/pumpfun-firehose.git
 cd pumpfun-firehose
 python -m venv .venv
 source .venv/bin/activate
+
+# full experience: CLI + dashboard + API + SQLite
+pip install -e ".[all]"
+```
+
+### Install only what you need
+
+| You want | Install | Pulls in |
+|---|---|---|
+| **Core library** | `pip install -e .` | `websockets` |
+| **CLI / JSONL stream** | `pip install -e ".[cli]"` | + `typer`, `rich`, `httpx` |
+| **Dashboard + API + SQLite** | `pip install -e ".[api]"` | + `fastapi`, `uvicorn`, `httpx`, `aiosqlite` |
+| **Everything** | `pip install -e ".[all]"` | all of the above |
+
+The core library never imports FastAPI, uvicorn, httpx, aiosqlite, rich, or typer. If you only want the firehose in your own Python process:
+
+```bash
 pip install -e .
+```
+
+```python
+from pumpfire import CoinBook, Firehose
+```
+
+The dashboard is also optional at runtime:
+
+```bash
+pumpfire api --no-ui   # HTTP/WebSocket API only, no frontend
 ```
 
 ### 1. Watch the firehose in your terminal

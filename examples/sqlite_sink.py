@@ -1,6 +1,7 @@
 """Persist the firehose to SQLite.
 
-    python examples/sqlite_sink.py
+Install:  pip install -e ".[api]"
+Run:      python examples/sqlite_sink.py
 
 Then inspect it with:
 

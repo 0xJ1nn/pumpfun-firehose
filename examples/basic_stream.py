@@ -1,6 +1,7 @@
 """Print every decoded pump.fun event for 60 seconds.
 
-    python examples/basic_stream.py
+Core install only:  pip install -e .
+Run:                python examples/basic_stream.py
 """
 
 from __future__ import annotations

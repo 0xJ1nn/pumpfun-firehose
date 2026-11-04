@@ -20,12 +20,14 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .constants import DEFAULT_STALE_AFTER_S, PUBLIC_WS, PUMP_PROGRAM
 from .decoder import decode_notification, notification_value
-from .metadata import MetadataFetcher
 from .models import CoinBook, CompleteEvent, CreateEvent, DecodedBatch, TradeEvent
+
+if TYPE_CHECKING:
+    from .metadata import MetadataFetcher
 
 LOGGER = logging.getLogger("pumpfire.firehose")
 
