@@ -606,6 +606,26 @@ class CoinBook:
         """Store an IDL event and fold PumpSwap trades into the live book."""
         self.raw_events.append(event)
         self.stats.raw_events += 1
+        fields = event.fields if isinstance(event.fields, dict) else {}
+        if event.program == "pump_amm" and fields.get("pool") and fields.get("base_mint"):
+            # CreatePoolEvent is the obvious source, but fee sweeps and creator
+            # events also carry pool + base_mint. Use any of them to discover a
+            # pool that existed before this process started.
+            pool = str(fields["pool"])
+            if pool not in self.pools:
+                quote_mint = str(fields.get("quote_mint") or "")
+                self._add_pool(
+                    PoolInfo(
+                        pool=pool,
+                        base_mint=str(fields["base_mint"]),
+                        base_decimals=6,
+                        quote_mint=quote_mint,
+                        quote_decimals=9 if quote_mint == WSOL_MINT else 6,
+                        created_ts=float(fields.get("timestamp") or event.seen_ts),
+                    ),
+                    event.seen_ts,
+                )
+                event.mint = str(fields["base_mint"])
         if event.program == "pump_amm":
             if event.name == "CreatePoolEvent":
                 self._register_pool(event)

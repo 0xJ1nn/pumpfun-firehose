@@ -121,6 +121,48 @@ def test_amm_sell_maps_to_trade_once_pool_is_known() -> None:
     assert trade.fee_sol == 0.00175
 
 
+def test_fee_event_discovers_existing_pool() -> None:
+    book = CoinBook()
+    book.apply_raw(
+        RawEvent(
+            program="pump_amm",
+            name="SweepPoolFeeEvent",
+            signature="fee-sig",
+            slot=1,
+            seen_ts=1_700_000_000.0,
+            fields={
+                "timestamp": 1_700_000_000,
+                "pool": "POOL",
+                "base_mint": "MINT",
+                "quote_mint": WSOL_MINT,
+            },
+        )
+    )
+    assert "POOL" in book.pools
+    assert book.pools["POOL"].base_mint == "MINT"
+    book.apply_raw(
+        RawEvent(
+            program="pump_amm",
+            name="BuyEvent",
+            signature="buy-sig",
+            slot=1,
+            seen_ts=1_700_000_001.0,
+            fields={
+                "timestamp": 1_700_000_001,
+                "base_amount_out": 1_000_000,
+                "quote_amount_in": 2_000_000_000,
+                "pool_base_token_reserves": 100_000_000,
+                "pool_quote_token_reserves": 50_000_000_000,
+                "pool": "POOL",
+                "user": "USER",
+                "base_supply": 1_000_000_000_000_000,
+            },
+        )
+    )
+    assert book.stats.amm_trades == 1
+    assert book.get("MINT").buys == 1
+
+
 def test_migration_event_registers_pool() -> None:
     book = CoinBook()
     book.apply_raw(
