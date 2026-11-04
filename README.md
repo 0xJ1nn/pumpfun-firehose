@@ -7,7 +7,7 @@
 **A clean, self-hosted real-time data layer for pump.fun.**  
 One WebSocket subscription. Every buy, every sell, every launch — decoded from the pump.fun program's own Anchor events. No scraping. No REST polling. No rate-limit tax.
 
-[![Tests](https://img.shields.io/badge/tests-66%20passing-14f195)](#development)
+[![Tests](https://img.shields.io/badge/tests-67%20passing-14f195)](#development)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-14f195)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-9945ff)](LICENSE)
 [![No API key](https://img.shields.io/badge/API%20key-not%20required-ff3d9a)](#why-this-exists)
@@ -250,7 +250,7 @@ curl -s 'localhost:8000/v1/pools' | jq
 
 For graduated coins:
 
-- `CreatePoolEvent` or the pump `CompletePumpAmmMigrationEvent` registers the pool.
+- `CreatePoolEvent`, the pump `CompletePumpAmmMigrationEvent`, or any AMM event carrying `pool` + `base_mint` (for example a fee sweep) registers the pool — so pools that existed before startup can still be discovered.
 - AMM `BuyEvent` / `SellEvent` are mapped into the same trade tape with `venue: "pumpswap"`.
 - The AMM pool reserves drive price and market cap after graduation.
 - Non-SOL quote pools are exposed as raw events rather than pretending their quote amount is SOL.
