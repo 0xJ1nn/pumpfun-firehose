@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pumpfun-firehose"
-version = "0.2.0"
+version = "0.3.0"
 description = "Every pump.fun trade, decoded straight from the chain. Zero API keys."
 readme = "README.md"
 license = { text = "MIT" }

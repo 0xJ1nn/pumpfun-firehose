@@ -1,0 +1,8 @@
+The JSON files in this directory are Anchor IDLs published by pump.fun in
+https://github.com/pump-fun/pump-public-docs. They describe public on-chain
+interfaces and are included for interoperability.
+
+They are not part of PumpFire's MIT-licensed source code. At the time of
+fetching, the upstream repository did not declare a license. If you
+redistribute this project and are unsure about their status, delete this
+directory and supply your own copies with an IDL loader.

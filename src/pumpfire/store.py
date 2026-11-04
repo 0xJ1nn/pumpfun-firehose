@@ -8,6 +8,7 @@ WebSocket reader.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import json
 import sqlite3
@@ -17,7 +18,7 @@ from contextlib import ExitStack, closing
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from .models import Coin, CompleteEvent, CreateEvent, TradeEvent
+from .models import Coin, CompleteEvent, CreateEvent, RawEvent, TradeEvent
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -44,7 +45,10 @@ CREATE TABLE IF NOT EXISTS trades (
   real_token REAL,
   fee_sol REAL,
   creator TEXT,
-  creator_fee_sol REAL
+  creator_fee_sol REAL,
+  venue TEXT,
+  pool TEXT,
+  total_supply REAL
 );
 CREATE INDEX IF NOT EXISTS ix_trades_mint_ts ON trades(mint, timestamp);
 CREATE INDEX IF NOT EXISTS ix_trades_ts ON trades(timestamp);
@@ -85,6 +89,8 @@ CREATE TABLE IF NOT EXISTS coins (
   uri TEXT,
   creator TEXT,
   bonding_curve TEXT,
+  pool TEXT,
+  venue TEXT,
   created_ts REAL,
   first_seen_ts REAL,
   last_ts REAL,
@@ -101,9 +107,24 @@ CREATE TABLE IF NOT EXISTS coins (
   curve_progress_pct REAL,
   metadata_json TEXT
 );
+
+CREATE TABLE IF NOT EXISTS raw_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  program TEXT NOT NULL,
+  event TEXT NOT NULL,
+  signature TEXT,
+  slot INTEGER,
+  seen_ts REAL NOT NULL,
+  discriminator TEXT,
+  extra_bytes INTEGER,
+  mint TEXT,
+  fields_json TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_raw_program_event ON raw_events(program, event);
+CREATE INDEX IF NOT EXISTS ix_raw_signature ON raw_events(signature);
 """
 
-TABLES = {"trades", "creates", "completes", "coins"}
+TABLES = {"trades", "creates", "completes", "coins", "raw_events"}
 
 
 class SQLiteStore:
@@ -131,6 +152,16 @@ class SQLiteStore:
             ) from exc
         self._db = await aiosqlite.connect(self.path)
         await self._db.executescript(SCHEMA)
+        # Additive migrations for databases created before venue/pool existed.
+        for statement in (
+            "ALTER TABLE trades ADD COLUMN venue TEXT",
+            "ALTER TABLE trades ADD COLUMN pool TEXT",
+            "ALTER TABLE trades ADD COLUMN total_supply REAL",
+            "ALTER TABLE coins ADD COLUMN pool TEXT",
+            "ALTER TABLE coins ADD COLUMN venue TEXT",
+        ):
+            with contextlib.suppress(Exception):
+                await self._db.execute(statement)
         await self._db.commit()
         self._task = asyncio.create_task(self._writer(), name="pumpfire-sqlite")
 
@@ -155,6 +186,9 @@ class SQLiteStore:
 
     def enqueue_coin(self, coin: Coin) -> None:
         self._put(("coin", coin))
+
+    def enqueue_raw(self, event: RawEvent) -> None:
+        self._put(("raw", event))
 
     def _put(self, item: tuple[str, Any]) -> None:
         try:
@@ -195,6 +229,7 @@ class SQLiteStore:
         creates: list[tuple[Any, ...]] = []
         completes: list[tuple[Any, ...]] = []
         coins: list[tuple[Any, ...]] = []
+        raw_events: list[tuple[Any, ...]] = []
         for kind, event in batch:
             if kind == "trade":
                 trades.append(_trade_row(event))
@@ -204,13 +239,15 @@ class SQLiteStore:
                 completes.append(_complete_row(event))
             elif kind == "coin":
                 coins.append(_coin_row(event))
+            elif kind == "raw":
+                raw_events.append(_raw_row(event))
         try:
             if trades:
                 await self._db.executemany(
                     "INSERT INTO trades (signature, mint, user, is_buy, sol, tokens, price_sol,"
                     " timestamp, slot, seen_ts, virtual_sol, virtual_token, real_sol, real_token,"
-                    " fee_sol, creator, creator_fee_sol)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " fee_sol, creator, creator_fee_sol, venue, pool, total_supply)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     trades,
                 )
             if creates:
@@ -230,13 +267,14 @@ class SQLiteStore:
             if coins:
                 await self._db.executemany(
                     "INSERT INTO coins (mint, name, symbol, uri, creator, bonding_curve,"
-                    " created_ts, first_seen_ts, last_ts, price_sol, market_cap_sol, volume_sol,"
-                    " buys, sells, trade_count, unique_buyers, unique_sellers, graduated,"
-                    " graduated_ts, curve_progress_pct, metadata_json)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                    " pool, venue, created_ts, first_seen_ts, last_ts, price_sol, market_cap_sol,"
+                    " volume_sol, buys, sells, trade_count, unique_buyers, unique_sellers,"
+                    " graduated, graduated_ts, curve_progress_pct, metadata_json)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                     " ON CONFLICT(mint) DO UPDATE SET"
                     " name=excluded.name, symbol=excluded.symbol, uri=excluded.uri,"
                     " creator=excluded.creator, bonding_curve=excluded.bonding_curve,"
+                    " pool=excluded.pool, venue=excluded.venue,"
                     " created_ts=excluded.created_ts, first_seen_ts=excluded.first_seen_ts,"
                     " last_ts=excluded.last_ts, price_sol=excluded.price_sol,"
                     " market_cap_sol=excluded.market_cap_sol, volume_sol=excluded.volume_sol,"
@@ -247,6 +285,13 @@ class SQLiteStore:
                     " curve_progress_pct=excluded.curve_progress_pct,"
                     " metadata_json=excluded.metadata_json",
                     coins,
+                )
+            if raw_events:
+                await self._db.executemany(
+                    "INSERT INTO raw_events (program, event, signature, slot, seen_ts,"
+                    " discriminator, extra_bytes, mint, fields_json)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    raw_events,
                 )
             await self._db.commit()
             self.written += len(batch)
@@ -282,6 +327,9 @@ def _trade_row(event: TradeEvent) -> tuple[Any, ...]:
         event.fee_sol,
         event.creator,
         event.creator_fee_sol,
+        event.venue,
+        event.pool,
+        event.total_supply,
     )
 
 
@@ -324,6 +372,8 @@ def _coin_row(coin: Coin) -> tuple[Any, ...]:
         coin.uri,
         coin.creator,
         coin.bonding_curve,
+        coin.pool,
+        coin.venue,
         coin.created_ts,
         coin.first_seen_ts,
         coin.last_ts,
@@ -339,6 +389,20 @@ def _coin_row(coin: Coin) -> tuple[Any, ...]:
         coin.graduated_ts,
         coin.curve_progress_pct(),
         json.dumps(coin.metadata, separators=(",", ":")),
+    )
+
+
+def _raw_row(event: RawEvent) -> tuple[Any, ...]:
+    return (
+        event.program,
+        event.name,
+        event.signature,
+        event.slot,
+        event.seen_ts,
+        event.discriminator,
+        event.extra_bytes,
+        event.mint,
+        json.dumps(event.fields, separators=(",", ":"), default=str),
     )
 
 

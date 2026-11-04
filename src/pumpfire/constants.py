@@ -9,6 +9,9 @@ from __future__ import annotations
 # The pump.fun bonding-curve program. One `logsSubscribe` that mentions this
 # program receives every trade and every launch on the curve.
 PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+# The PumpSwap AMM that graduated coins migrate to.
+PUMP_AMM_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
+WSOL_MINT = "So11111111111111111111111111111111111111112"
 
 # Anchor event discriminators: first eight bytes of sha256("event:<Name>").
 DISC_TRADE = bytes.fromhex("bddb7fd34ee661ee")       # TradeEvent

@@ -28,6 +28,8 @@ async def main() -> None:
             store.enqueue_create(event)
         elif event.kind == "complete":
             store.enqueue_complete(event)
+        elif event.kind == "raw":
+            store.enqueue_raw(event)
 
     firehose = Firehose(book, on_event=on_event)
     await firehose.start()

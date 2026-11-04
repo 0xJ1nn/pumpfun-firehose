@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from pumpfire.models import Coin, CompleteEvent, CreateEvent, TradeEvent
+from pumpfire.models import Coin, CompleteEvent, CreateEvent, RawEvent, TradeEvent
 from pumpfire.store import SQLiteStore, export_table, table_counts
 
 
@@ -66,6 +66,18 @@ async def test_store_round_trip(tmp_path) -> None:
     store.enqueue_trade(trade)
     store.enqueue_complete(complete)
     store.enqueue_coin(coin)
+    store.enqueue_raw(
+        RawEvent(
+            program="pump_amm",
+            name="SellEvent",
+            signature="raw-sig",
+            slot=1,
+            seen_ts=time.time(),
+            fields={"pool": "POOL", "quote_amount_out": 2_000_000_000},
+            discriminator="3e2f370aa503dcca",
+            mint="MINT",
+        )
+    )
     await store.stop()
     assert store.errors == 0
     counts = table_counts(db)
@@ -73,10 +85,13 @@ async def test_store_round_trip(tmp_path) -> None:
     assert counts["creates"] == 1
     assert counts["completes"] == 1
     assert counts["coins"] == 1
+    assert counts["raw_events"] == 1
     connection = sqlite3.connect(db)
     try:
-        row = connection.execute("SELECT mint, is_buy, sol FROM trades").fetchone()
-        assert row == ("MINT", 1, 1.5)
+        row = connection.execute("SELECT mint, is_buy, sol, venue FROM trades").fetchone()
+        assert row == ("MINT", 1, 1.5, "pumpfun")
+        raw = connection.execute("SELECT program, event, mint FROM raw_events").fetchone()
+        assert raw == ("pump_amm", "SellEvent", "MINT")
     finally:
         connection.close()
 

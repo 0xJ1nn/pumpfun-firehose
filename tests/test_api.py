@@ -5,7 +5,8 @@ import time
 from fastapi.testclient import TestClient
 
 from pumpfire.api import create_app
-from pumpfire.models import CoinBook, CompleteEvent, CreateEvent, TradeEvent
+from pumpfire.constants import WSOL_MINT
+from pumpfire.models import CoinBook, CompleteEvent, CreateEvent, RawEvent, TradeEvent
 
 
 def make_book() -> CoinBook:
@@ -128,6 +129,35 @@ def test_api_only_mode_skips_dashboard() -> None:
     assert response.status_code == 200
     assert "dashboard is disabled" in response.text
     assert "/v1/coins" in api_only.get("/openapi.json").text
+
+
+def test_events_and_pools_endpoints() -> None:
+    book = make_book()
+    book.apply_raw(
+        RawEvent(
+            program="pump_amm",
+            name="CreatePoolEvent",
+            signature="pool-sig",
+            slot=1,
+            seen_ts=time.time(),
+            fields={
+                "timestamp": int(time.time()),
+                "pool": "POOL",
+                "base_mint": "MINT1",
+                "base_mint_decimals": 6,
+                "quote_mint": WSOL_MINT,
+                "quote_mint_decimals": 9,
+            },
+        )
+    )
+    api = TestClient(create_app(book))
+    events = api.get("/v1/events?program=pump_amm").json()
+    assert events["count"] == 1
+    assert events["events"][0]["event"] == "CreatePoolEvent"
+    assert events["events"][0]["mint"] == "MINT1"
+    pools = api.get("/v1/pools").json()
+    assert pools["count"] == 1
+    assert pools["pools"][0]["pool"] == "POOL"
 
 
 def test_websocket_snapshot() -> None:
