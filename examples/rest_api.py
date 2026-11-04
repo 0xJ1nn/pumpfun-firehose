@@ -1,7 +1,7 @@
 """Run the dashboard and API from Python.
 
-    python examples/rest_api.py
-
+Install:  pip install -e ".[api]"
+Run:      python examples/rest_api.py
 Then open http://127.0.0.1:8000.
 """
 

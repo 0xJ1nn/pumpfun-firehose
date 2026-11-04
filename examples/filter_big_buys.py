@@ -1,6 +1,7 @@
 """Alert on buys of 2 SOL or more on coins younger than ten minutes.
 
-    python examples/filter_big_buys.py
+Core install only:  pip install -e .
+Run:                python examples/filter_big_buys.py
 """
 
 from __future__ import annotations

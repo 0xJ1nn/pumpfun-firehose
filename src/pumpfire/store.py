@@ -15,11 +15,12 @@ import sys
 import time
 from contextlib import ExitStack, closing
 from pathlib import Path
-from typing import Any, TextIO
-
-import aiosqlite
+from typing import TYPE_CHECKING, Any, TextIO
 
 from .models import Coin, CompleteEvent, CreateEvent, TradeEvent
+
+if TYPE_CHECKING:
+    import aiosqlite
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -121,6 +122,13 @@ class SQLiteStore:
         self._stop = asyncio.Event()
 
     async def start(self) -> None:
+        try:
+            import aiosqlite
+        except ImportError as exc:  # pragma: no cover - exercised by the optional-import test
+            raise RuntimeError(
+                "SQLite persistence needs optional dependencies. "
+                "Install with: pip install 'pumpfun-firehose[api]'"
+            ) from exc
         self._db = await aiosqlite.connect(self.path)
         await self._db.executescript(SCHEMA)
         await self._db.commit()

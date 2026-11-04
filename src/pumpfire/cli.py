@@ -19,7 +19,6 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
-from .api import create_app
 from .decoder import decode_log_line, decode_logs
 from .demo import DemoFeed
 from .firehose import Firehose
@@ -303,10 +302,23 @@ def api(
     no_metadata: Annotated[bool, typer.Option("--no-metadata", help="Skip token metadata fetches.")] = False,
     sol_usd: Annotated[float, typer.Option("--sol-usd", help="Pin SOL/USD instead of fetching it.")] = 0.0,
     demo: Annotated[bool, typer.Option(help="Serve simulated data (no network).")] = False,
+    no_ui: Annotated[
+        bool,
+        typer.Option("--no-ui", help="Disable the dashboard; serve the API only."),
+    ] = False,
     max_coins: Annotated[int, typer.Option(help="Maximum coins kept in memory.")] = 10_000,
 ) -> None:
     """Serve the dashboard, HTTP API, and WebSocket."""
-    import uvicorn
+    try:
+        import uvicorn
+
+        from .api import create_app
+    except ImportError as exc:
+        console.print(
+            "[red]The API needs optional dependencies.[/]\n"
+            "Install with: [bold]pip install 'pumpfun-firehose[api]'[/]"
+        )
+        raise typer.Exit(code=1) from exc
 
     book = _build_book(max_coins)
     if demo:
@@ -327,6 +339,7 @@ def api(
         store=store,
         metadata=metadata,
         demo=demo_feed,
+        serve_ui=not no_ui,
     )
     console.print(
         f"[bold green]PumpFire[/] on [bold]http://{host}:{port}[/]"
