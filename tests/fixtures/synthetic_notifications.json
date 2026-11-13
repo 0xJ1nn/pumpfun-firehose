@@ -1,0 +1,57 @@
+[
+  {
+    "_fixture": {
+      "kind": "synthetic",
+      "note": "TEST-ONLY synthetic logsSubscribe notifications. Not real traffic: wallet, mint, curve and signature values are generated from repeated bytes and carry no chain meaning.",
+      "decode": "pumpfire.backfill.load_fixture -> pumpfire.backfill.replay_fixture (same decode path as the live firehose)"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "logsNotification",
+    "params": {
+      "result": {
+        "context": {
+          "slot": 424242
+        },
+        "value": {
+          "signature": "5SYNTHETICcreate0000000000000000000000000000",
+          "slot": 424242,
+          "err": null,
+          "logs": [
+            "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
+            "Program log: Instruction: Create",
+            "Program data: G3KpTd7rY3YJAAAAVGVzdCBDb2luBAAAAFRFU1QQAAAAaXBmczovL2JhZnktdGVzdAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAPFTZQAAAAAAENhH488DAACsI/wGAAAAAHjF+1HRAgAAgMakfo0DAA==",
+            "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P success"
+          ]
+        }
+      },
+      "subscription": 1
+    },
+    "seen_ts": 1700424242.0
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "logsNotification",
+    "params": {
+      "result": {
+        "context": {
+          "slot": 424243
+        },
+        "value": {
+          "signature": "5SYNTHETICtrade00000000000000000000000000000",
+          "slot": 424243,
+          "err": null,
+          "logs": [
+            "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
+            "Program log: Instruction: Buy",
+            "Program data: vdt/007mYe4BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQAvaFkAAAAAAOQLVAIAAAABAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA8VNlAAAAAACCNXoKAAAAAEBMlIsyAwAA1hF+AwAAAADAV3OlfAIA",
+            "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P success"
+          ]
+        }
+      },
+      "subscription": 1
+    },
+    "seen_ts": 1700424243.0
+  }
+]

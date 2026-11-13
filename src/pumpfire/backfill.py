@@ -227,6 +227,31 @@ def replay_records(
     return stats
 
 
+def load_fixture(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Read a fixture file and separate its provenance marker from its records.
+
+    A fixture may carry a leading ``{"_fixture": {...}}`` object describing where
+    the sample came from. It is not traffic, so it is returned separately and
+    never handed to the decoder.
+    """
+    records = read_records(path)
+    if records and "_fixture" in records[0]:
+        return dict(records[0]["_fixture"]), records[1:]
+    return {}, records
+
+
+def replay_fixture(
+    path: str | Path,
+    book: CoinBook,
+    *,
+    on_event: EventCallback | None = None,
+    registry: IdlRegistry | None = None,
+) -> BackfillStats:
+    """Replay a fixture file through the same decoder the live firehose uses."""
+    _, records = load_fixture(path)
+    return replay_records(records, book, on_event=on_event, registry=registry)
+
+
 async def backfill_events(
     client: RpcClient,
     *,

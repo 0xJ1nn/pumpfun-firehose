@@ -103,10 +103,10 @@ def create_app(
         if firehose is None:
             return {"ok": True, "mode": "book-only", "ts": round(time.time(), 3)}
         stream = firehose.health()
-        ok = bool(stream["connected"] and not stream["stale"])
+        ok = stream.live
         if not ok:
             response.status_code = 503
-        return {"ok": ok, "mode": "live", "ts": round(time.time(), 3), "stream": stream}
+        return {"ok": ok, "mode": "live", "ts": round(time.time(), 3), "stream": stream.as_dict()}
 
     @app.get("/v1/stats", tags=["system"])
     async def stats() -> dict[str, Any]:
@@ -132,7 +132,7 @@ def create_app(
             ),
         }
         if firehose is not None:
-            payload["stream"] = firehose.health()
+            payload["stream"] = firehose.health().as_dict()
         if store is not None:
             payload["store"] = store.health()
         return payload
