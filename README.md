@@ -386,6 +386,11 @@ asyncio.run(main())
 
 The stream reconnects by nature, so a gap must be visible and untradeable. `firehose.health()` returns a `StreamHealth` object with the last-event age, reconnect count, dropped count, and the decoded/rejected ratio. `firehose.is_stale()` and `firehose.gate` report the same decision.
 
+Age is measured on the monotonic clock, so a wall-clock step cannot hide a real
+gap; `last_event_ts` is the wall-clock instant of the last event, for display
+only. A connection that fails before any connection was established is counted
+in `health().connect_failures`, not in `reconnects`.
+
 An entry that depends on a live stream can refuse itself while the last event is older than the threshold:
 
 ```python
@@ -416,6 +421,8 @@ oldest event under pressure and counts each drop in `health().dropped`; its
 `load_fixture` / `replay_fixture` read a JSON array or JSONL of `logsSubscribe`
 notifications and replay them through the same decoder the live firehose uses. A
 leading `{"_fixture": {...}}` object describes provenance and is never decoded.
+`replay_fixture` warns when that provenance marks the records as `synthetic`, so
+test data is never mistaken for real traffic.
 
 Real captured traffic is the intended source for these fixtures. No real
 recording is committed yet, so `tests/fixtures/synthetic_notifications.json` is a

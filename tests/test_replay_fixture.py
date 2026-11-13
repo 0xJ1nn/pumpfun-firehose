@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from pumpfire import CoinBook, Firehose
 from pumpfire.backfill import decode_record, load_fixture, replay_fixture
 from pumpfire.models import CreateEvent, TradeEvent
@@ -48,6 +50,15 @@ def test_fixture_replays_through_the_shared_decode_path(mint_str: str) -> None:
     assert trade.is_buy is True
     assert trade.sol > 0
     assert book.stats.trades == 1
+
+
+def test_replaying_a_synthetic_fixture_warns_about_provenance() -> None:
+    book = CoinBook()
+
+    with pytest.warns(UserWarning, match="synthetic"):
+        stats = replay_fixture(FIXTURE, book)
+
+    assert stats.records == 2
 
 
 def test_fixture_decode_matches_the_live_ingest_path() -> None:

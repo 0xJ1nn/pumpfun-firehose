@@ -37,9 +37,11 @@ class StaleStream(RuntimeError):
 
     def __init__(self, decision: GateDecision) -> None:
         self.decision = decision
+        age = decision.age_s
+        detail = "no event observed yet" if age is None else f"last event age {age}s"
         super().__init__(
-            f"stream is not live ({decision.reason}); "
-            f"last event age {decision.age_s}s, threshold {decision.stale_after_s}s"
+            f"stream is not live ({decision.reason}); {detail}, "
+            f"threshold {decision.stale_after_s}s"
         )
 
 
@@ -68,32 +70,43 @@ class StalenessGate:
 
     An event at or under the threshold is live; anything older, or no event at
     all, is stale and therefore untradeable.
+
+    Age is measured on the monotonic clock, so a wall-clock step (NTP, manual
+    change, VM restore) can neither hide a real gap nor manufacture one.
+    ``last_event_ts`` keeps the wall-clock instant of the last event for
+    display only.
     """
 
-    __slots__ = ("stale_after_s", "last_event_ts")
+    __slots__ = ("stale_after_s", "last_event_ts", "_last_event_mono")
 
     def __init__(self, stale_after_s: float) -> None:
         if stale_after_s <= 0:
             raise ValueError("stale_after_s must be positive")
         self.stale_after_s = float(stale_after_s)
         self.last_event_ts: float | None = None
+        self._last_event_mono: float | None = None
 
     def observe(self, now: float | None = None) -> None:
-        """Record an event (or a message that proves the socket is alive)."""
-        self.last_event_ts = time.time() if now is None else now
+        """Record an event (or a message that proves the socket is alive).
+
+        ``now`` overrides the monotonic timebase used for age, as in
+        :meth:`age`. The displayed wall-clock timestamp is always sampled from
+        :func:`time.time`, because it is not used for any decision.
+        """
+        self._last_event_mono = time.monotonic() if now is None else now
+        self.last_event_ts = time.time()
 
     def age(self, now: float | None = None) -> float | None:
-        if self.last_event_ts is None:
+        if self._last_event_mono is None:
             return None
-        now = time.time() if now is None else now
-        return round(max(0.0, now - self.last_event_ts), 3)
+        now = time.monotonic() if now is None else now
+        return round(max(0.0, now - self._last_event_mono), 3)
 
     def is_stale(self, now: float | None = None) -> bool:
-        age = self.age(now)
-        return True if age is None else age > self.stale_after_s
+        return self.check(now).stale
 
     def is_live(self, now: float | None = None) -> bool:
-        return not self.is_stale(now)
+        return self.check(now).live
 
     def check(self, now: float | None = None) -> GateDecision:
         age = self.age(now)
@@ -206,6 +219,7 @@ class StreamHealth:
     rejected: int
     queue: QueueCensus
     last_error: str | None = None
+    connect_failures: int = 0
     unknown_events: int = 0
     program_data_lines: int = 0
     malformed: int = 0
@@ -242,6 +256,7 @@ class StreamHealth:
             "stale": self.stale,
             "stale_after_s": self.stale_after_s,
             "reconnects": self.reconnects,
+            "connect_failures": self.connect_failures,
             "dropped": self.dropped,
             "decoded": self.decoded,
             "rejected": self.rejected,

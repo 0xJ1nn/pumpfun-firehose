@@ -82,8 +82,10 @@ class Firehose:
         self._stop = asyncio.Event()
         self.gate = StalenessGate(stale_after_s)
         self.connected = False
+        self._ever_connected = False
         self.endpoint: str | None = None
         self.last_error: str | None = None
+        self.connect_failures = 0
         self.unknown_events = 0
         self.program_data_lines = 0
         self.malformed = 0
@@ -174,6 +176,7 @@ class Firehose:
             self.endpoint = url
             self.book.stats.endpoint = url
             self.connected = True
+            self._ever_connected = True
             LOGGER.info("subscribed to %s via %s", ", ".join(self.programs), url)
             while not self._stop.is_set():
                 try:
@@ -210,7 +213,7 @@ class Firehose:
         now = time.time()
         # Any notification with a signature proves the socket is alive, including
         # a duplicate, so the gate is refreshed before the duplicate check.
-        self.gate.observe(now)
+        self.gate.observe()
         self.book.stats.messages += 1
         self.book.stats.message_rate.add(now=now)
         self.book.stats.last_message_ts = now
@@ -300,7 +303,10 @@ class Firehose:
                 raise
             except Exception as exc:
                 self.connected = False
-                self.book.stats.reconnects += 1
+                if self._ever_connected:
+                    self.book.stats.reconnects += 1
+                else:
+                    self.connect_failures += 1
                 self.last_error = repr(exc)[:200]
                 LOGGER.warning("reconnecting after %s: %s", url, exc)
                 index += 1
@@ -325,6 +331,7 @@ class Firehose:
             if self._queue is not None
             else QueueCensus(depth=0, maxsize=self.max_queue, enqueued=0, dropped=0)
         )
+        decision = self.gate.check()
         return StreamHealth(
             connected=self.connected,
             endpoint=self.endpoint,
@@ -333,14 +340,15 @@ class Firehose:
             commitment=self.commitment,
             stale_after_s=self.stale_after_s,
             last_event_ts=self.gate.last_event_ts,
-            last_event_age_s=self.gate.age(),
-            stale=self.gate.is_stale(),
+            last_event_age_s=decision.age_s,
+            stale=decision.stale,
             reconnects=self.book.stats.reconnects,
             dropped=self.dropped,
             decoded=self.decoded,
             rejected=self.rejected,
             queue=census,
             last_error=self.last_error,
+            connect_failures=self.connect_failures,
             unknown_events=self.unknown_events,
             program_data_lines=self.program_data_lines,
             malformed=self.malformed,

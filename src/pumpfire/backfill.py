@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import warnings
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -247,8 +248,18 @@ def replay_fixture(
     on_event: EventCallback | None = None,
     registry: IdlRegistry | None = None,
 ) -> BackfillStats:
-    """Replay a fixture file through the same decoder the live firehose uses."""
-    _, records = load_fixture(path)
+    """Replay a fixture file through the same decoder the live firehose uses.
+
+    A fixture whose provenance marks it ``synthetic`` is test data, so replaying
+    it warns instead of passing it off as real traffic.
+    """
+    meta, records = load_fixture(path)
+    if meta.get("kind") == "synthetic":
+        warnings.warn(
+            f"replaying synthetic fixture {path}: its records are test-only, not real traffic",
+            UserWarning,
+            stacklevel=2,
+        )
     return replay_records(records, book, on_event=on_event, registry=registry)
 
 
