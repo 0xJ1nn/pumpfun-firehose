@@ -18,6 +18,14 @@ from .decoder import (
     decode_transaction,
 )
 from .firehose import Firehose
+from .health import (
+    EventQueue,
+    GateDecision,
+    QueueCensus,
+    StalenessGate,
+    StaleStream,
+    StreamHealth,
+)
 from .idl import IdlRegistry
 from .models import (
     Coin,
@@ -46,9 +54,15 @@ __all__ = [
     "CompleteEvent",
     "CreateEvent",
     "DecodedBatch",
+    "EventQueue",
     "Firehose",
+    "GateDecision",
     "IdlRegistry",
+    "QueueCensus",
     "RawEvent",
+    "StaleStream",
+    "StalenessGate",
+    "StreamHealth",
     "TradeEvent",
     "decode_log_line",
     "decode_logs",

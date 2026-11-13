@@ -7,7 +7,7 @@
 **A clean, self-hosted real-time data layer for pump.fun.**  
 One WebSocket subscription. Every buy, every sell, every launch — decoded from the pump.fun program's own Anchor events. No scraping. No REST polling. No rate-limit tax.
 
-[![Tests](https://img.shields.io/badge/tests-67%20passing-14f195)](#development)
+[![Tests](https://img.shields.io/badge/tests-82%20passing-14f195)](#development)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-14f195)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-9945ff)](LICENSE)
 [![No API key](https://img.shields.io/badge/API%20key-not%20required-ff3d9a)](#why-this-exists)
@@ -382,6 +382,54 @@ async def main():
 asyncio.run(main())
 ```
 
+### Liveness: the staleness gate
+
+The stream reconnects by nature, so a gap must be visible and untradeable. `firehose.health()` returns a `StreamHealth` object with the last-event age, reconnect count, dropped count, and the decoded/rejected ratio. `firehose.is_stale()` and `firehose.gate` report the same decision.
+
+Age is measured on the monotonic clock, so a wall-clock step cannot hide a real
+gap; `last_event_ts` is the wall-clock instant of the last event, for display
+only. A connection that fails before any connection was established is counted
+in `health().connect_failures`, not in `reconnects`.
+
+An entry that depends on a live stream can refuse itself while the last event is older than the threshold:
+
+```python
+from pumpfire import StaleStream, StalenessGate
+
+gate = StalenessGate(stale_after_s=45.0)
+gate.observe()                  # call on every event that proves the stream is alive
+
+if not gate.allows():
+    return                      # stale or no event yet: no entry
+
+try:
+    gate.require_live()         # raises StaleStream instead of returning False
+except StaleStream as exc:
+    print("refused entry:", exc)
+```
+
+`health().decoded_ratio` and `health().rejected_ratio` split notifications into
+decoded and rejected shares; both are `None` until the first notification.
+
+`Firehose` shares one gate between the reader and `health()`, so `is_stale()` is
+not a second clock. The dispatch queue (`max_queue`, default 20,000) drops the
+oldest event under pressure and counts each drop in `health().dropped`; its
+`census()` is synchronous, so observing the queue never blocks the reader.
+
+### Fixtures and replay
+
+`load_fixture` / `replay_fixture` read a JSON array or JSONL of `logsSubscribe`
+notifications and replay them through the same decoder the live firehose uses. A
+leading `{"_fixture": {...}}` object describes provenance and is never decoded.
+`replay_fixture` warns when that provenance marks the records as `synthetic`, so
+test data is never mistaken for real traffic.
+
+Real captured traffic is the intended source for these fixtures. No real
+recording is committed yet, so `tests/fixtures/synthetic_notifications.json` is a
+**TEST-ONLY synthetic** sample: its wallets, mints and signatures are generated
+from repeated bytes and carry no chain meaning. It exists to exercise the replay
+path, not to represent live data.
+
 More in [`examples/`](examples/):
 
 - [`basic_stream.py`](examples/basic_stream.py) — print every event
@@ -464,7 +512,7 @@ PUMPFIRE_SOL_USD=200 pumpfire api --db research.db
 - USD values depend on the SOL/USD feed (Coinbase → Kraken → CoinGecko → Jupiter fallback). Use `--sol-usd` to pin it.
 - Unique buyer/seller counts are exact up to 5,000 wallets per coin; beyond that the UI reports `5000+` to keep memory bounded.
 - Metadata (image, description, socials) is fetched from the token's `uri` when available. IPFS/Arweave gateways can be slow; a missing image is normal.
-- Public WSS endpoints can rate-limit, drop, or reconnect. PumpFire rotates endpoints, backs off, dedupes signatures, and exposes `last_message_age_s` so you can see a gap.
+- Public WSS endpoints can rate-limit, drop, or reconnect. PumpFire rotates endpoints, backs off, dedupes signatures, and exposes `last_event_age_s` so you can see a gap.
 - `processed` commitment can be reorged. Use `--commitment confirmed` or `finalized` if you need stronger guarantees (at the cost of latency).
 - The in-memory book is bounded. It is a live view, not a historical index. Use `--db` for durable history.
 - Graduated coins leave the pump.fun bonding curve. PumpFire marks them and stops curve updates; post-graduation PumpSwap AMM trades are **not** part of this firehose (yet).

@@ -7,13 +7,14 @@ transaction fetch, no API key, no quota.
 
 The reader and the user callback are separate tasks joined by a bounded queue,
 so a slow callback drops the oldest event and increments a counter instead of
-stalling the socket.
+stalling the socket. The last-event timestamp feeds a
+:class:`~pumpfire.health.StalenessGate`, which reports the stream as not live
+once a gap exceeds ``stale_after_s``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
 import json
 import logging
@@ -29,6 +30,7 @@ from .constants import (
     PUMP_PROGRAM,
 )
 from .decoder import decode_notification, notification_value
+from .health import EventQueue, QueueCensus, StalenessGate, StreamHealth
 from .models import CoinBook, CompleteEvent, CreateEvent, DecodedBatch, RawEvent, TradeEvent
 
 if TYPE_CHECKING:
@@ -75,16 +77,21 @@ class Firehose:
         self._on_event = on_event
         self._connect = connect
         self._seen: OrderedDict[str, float] = OrderedDict()
-        self._queue: asyncio.Queue[Event] | None = None
+        self._queue: EventQueue[Event] | None = None
         self._tasks: list[asyncio.Task[Any]] = []
         self._stop = asyncio.Event()
+        self.gate = StalenessGate(stale_after_s)
         self.connected = False
+        self._ever_connected = False
         self.endpoint: str | None = None
         self.last_error: str | None = None
+        self.connect_failures = 0
         self.unknown_events = 0
         self.program_data_lines = 0
         self.malformed = 0
         self.dropped = 0
+        self.decoded = 0
+        self.rejected = 0
 
     # ── lifecycle ───────────────────────────────────────────────────────
     async def __aenter__(self) -> Firehose:
@@ -98,7 +105,7 @@ class Firehose:
         if self.metadata is not None:
             await self.metadata.start()
         if self._on_event is not None:
-            self._queue = asyncio.Queue(maxsize=self.max_queue)
+            self._queue = EventQueue(self.max_queue)
             self._tasks.append(asyncio.create_task(self._dispatch_loop(), name="pumpfire-dispatch"))
         self._tasks.append(asyncio.create_task(self.run(), name="pumpfire-reader"))
         await asyncio.sleep(0)
@@ -121,7 +128,7 @@ class Firehose:
 
             self._on_event = combined
         if self._queue is None and self._tasks:
-            self._queue = asyncio.Queue(maxsize=self.max_queue)
+            self._queue = EventQueue(self.max_queue)
             self._tasks.append(asyncio.create_task(self._dispatch_loop(), name="pumpfire-dispatch"))
 
     async def stop(self) -> None:
@@ -169,6 +176,7 @@ class Firehose:
             self.endpoint = url
             self.book.stats.endpoint = url
             self.connected = True
+            self._ever_connected = True
             LOGGER.info("subscribed to %s via %s", ", ".join(self.programs), url)
             while not self._stop.is_set():
                 try:
@@ -182,10 +190,12 @@ class Firehose:
             message = json.loads(raw)
         except Exception:
             self.malformed += 1
+            self.rejected += 1
             self.book.stats.errors += 1
             return
         if not isinstance(message, dict):
             self.malformed += 1
+            self.rejected += 1
             return
         if "params" not in message:
             error = message.get("error")
@@ -194,11 +204,16 @@ class Firehose:
             return
         value = notification_value(message)
         if value is None:
+            self.rejected += 1
             return
         signature = value.get("signature")
         if not signature:
+            self.rejected += 1
             return
         now = time.time()
+        # Any notification with a signature proves the socket is alive, including
+        # a duplicate, so the gate is refreshed before the duplicate check.
+        self.gate.observe()
         self.book.stats.messages += 1
         self.book.stats.message_rate.add(now=now)
         self.book.stats.last_message_ts = now
@@ -226,9 +241,11 @@ class Firehose:
         program_data = sum(1 for line in logs if line.startswith("Program data:"))
         self.program_data_lines += program_data
         if not batch.events:
+            self.rejected += 1
             if program_data:
                 self.unknown_events += 1
             return
+        self.decoded += 1
         self.book.stats.notifications += 1
         self.book.stats.decoded += len(batch.events)
         for creation in batch.creates:
@@ -249,11 +266,7 @@ class Firehose:
     def _emit(self, event: Event) -> None:
         if self._queue is None:
             return
-        try:
-            self._queue.put_nowait(event)
-        except asyncio.QueueFull:
-            with contextlib.suppress(asyncio.QueueEmpty):
-                self._queue.get_nowait()
+        if self._queue.put_nowait(event):
             self.dropped += 1
             self.book.stats.dropped += 1
 
@@ -290,7 +303,10 @@ class Firehose:
                 raise
             except Exception as exc:
                 self.connected = False
-                self.book.stats.reconnects += 1
+                if self._ever_connected:
+                    self.book.stats.reconnects += 1
+                else:
+                    self.connect_failures += 1
                 self.last_error = repr(exc)[:200]
                 LOGGER.warning("reconnecting after %s: %s", url, exc)
                 index += 1
@@ -299,32 +315,45 @@ class Firehose:
 
     # ── observability ───────────────────────────────────────────────────
     def last_message_age(self) -> float | None:
-        last = self.book.stats.last_message_ts
-        return None if not last else round(time.time() - last, 1)
+        return self.gate.age()
 
     def is_stale(self) -> bool:
-        age = self.last_message_age()
-        return age is None or age > self.stale_after_s
+        return self.gate.is_stale()
 
-    def health(self) -> dict[str, Any]:
-        return {
-            "connected": self.connected,
-            "endpoint": self.endpoint,
-            "program": self.program,
-            "programs": self.programs,
-            "commitment": self.commitment,
-            "last_message_age_s": self.last_message_age(),
-            "stale": self.is_stale(),
-            "stale_after_s": self.stale_after_s,
-            "reconnects": self.book.stats.reconnects,
-            "dropped": self.dropped,
-            "queue_depth": self._queue.qsize() if self._queue is not None else 0,
-            "last_error": self.last_error,
-            "unknown_events": self.unknown_events,
-            "program_data_lines": self.program_data_lines,
-            "malformed": self.malformed,
-            "stats": self.book.stats_dict(),
-        }
+    @property
+    def last_event_age(self) -> float | None:
+        return self.gate.age()
+
+    def health(self) -> StreamHealth:
+        """A consistent snapshot: age, reconnects, drops, and the decode ratio."""
+        census = (
+            self._queue.census()
+            if self._queue is not None
+            else QueueCensus(depth=0, maxsize=self.max_queue, enqueued=0, dropped=0)
+        )
+        decision = self.gate.check()
+        return StreamHealth(
+            connected=self.connected,
+            endpoint=self.endpoint,
+            program=self.program,
+            programs=tuple(self.programs),
+            commitment=self.commitment,
+            stale_after_s=self.stale_after_s,
+            last_event_ts=self.gate.last_event_ts,
+            last_event_age_s=decision.age_s,
+            stale=decision.stale,
+            reconnects=self.book.stats.reconnects,
+            dropped=self.dropped,
+            decoded=self.decoded,
+            rejected=self.rejected,
+            queue=census,
+            last_error=self.last_error,
+            connect_failures=self.connect_failures,
+            unknown_events=self.unknown_events,
+            program_data_lines=self.program_data_lines,
+            malformed=self.malformed,
+            stats=self.book.stats_dict(),
+        )
 
 
 async def _maybe_await(callback: EventCallback | None, item: Event) -> None:
